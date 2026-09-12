@@ -1,5 +1,16 @@
 # CampusClock · 课表与作业
 
+## Owner's words
+
+An AI-assisted software application for managing campus class schedules.
+
+The major feature is a floating ball on the desktop, which displays the schedule when the mouse hovers over it, without opening the app's main window.
+
+Another feature is that users can add and edit homework directly through the floating ball. To be honest, that's what drove me to create this program.
+
+Schedules in `.ics` format are supported.
+
+## 简介
 一个完全本地运行的 Windows 桌面小工具：读取 `.ics` 课表、显示本周课程、记录每门课的作业，并在桌面提供一个会自动展开的悬浮球。
 
 - 不需要登录、不联网、不写注册表，所有数据都在本文件夹的 `data\` 里
