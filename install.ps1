@@ -22,6 +22,9 @@ Copy-Item (Join-Path $Source 'assets\campusclock.ico') (Join-Path $Dest 'assets'
 Copy-Item (Join-Path $Source 'build.ps1') $Dest -Force
 Copy-Item (Join-Path $Source 'README.md') $Dest -Force
 Copy-Item $PSCommandPath $Dest -Force
+if (Test-Path (Join-Path $Source '.gitignore')) {
+    Copy-Item (Join-Path $Source '.gitignore') $Dest -Force
+}
 
 # drop source files that no longer exist in the source tree
 $srcDest = Join-Path $Dest 'src'
