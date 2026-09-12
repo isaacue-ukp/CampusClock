@@ -1,0 +1,19 @@
+# ---- 个人数据（课表 / 作业 / 设置 / 日志），程序首次运行会自动创建 ----
+data/
+
+# ---- 编译产物（建议用 Releases 分发 exe）----
+CampusClock.exe
+*.exe
+bin/
+obj/
+
+# ---- 自检生成的预览图 ----
+*-preview.png
+
+# ---- 编辑器与系统垃圾 ----
+.vs/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+desktop.ini
