@@ -38,8 +38,10 @@ namespace CampusClock
         private bool animating;
         private bool animExpanding;
         private DateTime animStart;
-        private double animFrom;
-        private double animTo;
+        private double animFromW;
+        private double animFromH;
+        private double animToW;
+        private double animToH;
         private double anchorLeft;
         private double anchorTop;
         private double anchorW;
@@ -108,9 +110,22 @@ namespace CampusClock
             Deactivated += delegate { ScheduleCollapse(); };
         }
 
+        /// <summary>Collapsed ball: height = BallSize, width = height * this factor.</summary>
+        private const double BallAspect = 1.6;
+
         private double BallRadius()
         {
             return core.Config.BallSize * 0.34;
+        }
+
+        private double BallHeight()
+        {
+            return core.Config.BallSize;
+        }
+
+        private double BallWidth()
+        {
+            return Math.Round(core.Config.BallSize * BallAspect);
         }
 
         private Brush BuildShellBrush()
@@ -151,8 +166,8 @@ namespace CampusClock
             half.Cursor = Cursors.Hand;
             StackPanel sp = new StackPanel();
             sp.VerticalAlignment = VerticalAlignment.Center;
-            sp.HorizontalAlignment = left ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-            sp.Margin = left ? new Thickness(0, 0, 11, 0) : new Thickness(11, 0, 0, 0);
+            sp.HorizontalAlignment = HorizontalAlignment.Center;
+            sp.Margin = new Thickness(6, 0, 6, 0);
             TextBlock icon = Ui.Icon(glyph, 15, Palette.TextSecondary);
             TextBlock caption = Ui.Text(label, 9.5, Palette.TextMuted);
             caption.HorizontalAlignment = HorizontalAlignment.Center;
@@ -377,9 +392,8 @@ namespace CampusClock
             UpdatePin();
             if (!expanded && !animating)
             {
-                double size = core.Config.BallSize;
-                Width = size;
-                Height = size;
+                Width = BallWidth();
+                Height = BallHeight();
                 shell.CornerRadius = new CornerRadius(BallRadius());
                 PlaceCollapsed();
             }
@@ -393,21 +407,22 @@ namespace CampusClock
         private void PlaceCollapsed()
         {
             Rect work = WorkArea();
-            double size = core.Config.BallSize;
+            double w = BallWidth();
+            double h = BallHeight();
             double left = core.Config.BallLeft == int.MinValue
-                ? work.Right - size - 36
+                ? work.Right - w - 36
                 : core.Config.BallLeft;
             double top = core.Config.BallTop == int.MinValue
-                ? work.Top + (work.Height - size) / 2
+                ? work.Top + (work.Height - h) / 2
                 : core.Config.BallTop;
-            left = Math.Max(work.Left, Math.Min(work.Right - size, left));
-            top = Math.Max(work.Top, Math.Min(work.Bottom - size, top));
+            left = Math.Max(work.Left, Math.Min(work.Right - w, left));
+            top = Math.Max(work.Top, Math.Min(work.Bottom - h, top));
             Left = left;
             Top = top;
             anchorLeft = left;
             anchorTop = top;
-            anchorW = size;
-            anchorH = size;
+            anchorW = w;
+            anchorH = h;
         }
 
         private Rect WorkArea()
@@ -456,31 +471,35 @@ namespace CampusClock
             bodyHost.Content = null;
             UpdateTabs();
 
-            StartAnim(anchorW, ExpandedSize(), true);
+            double side = ExpandedSize();
+            StartAnim(anchorW, anchorH, side, side, true);
         }
 
         public void Collapse()
         {
             if (animating) return;
             if (!expanded) return;
-            double ball = core.Config.BallSize;
+            double ballW = BallWidth();
+            double ballH = BallHeight();
             // keep the ball near where the panel was
-            double newLeft = expandRight ? Left : Left + Width - ball;
-            double newTop = expandDown ? Top : Top + Height - ball;
+            double newLeft = expandRight ? Left : Left + Width - ballW;
+            double newTop = expandDown ? Top : Top + Height - ballH;
             anchorLeft = newLeft;
             anchorTop = newTop;
             core.Config.BallLeft = (int)Math.Round(newLeft);
             core.Config.BallTop = (int)Math.Round(newTop);
             core.SaveConfig();
-            StartAnim(Width, ball, false);
+            StartAnim(Width, Height, ballW, ballH, false);
         }
 
-        private void StartAnim(double from, double to, bool expanding)
+        private void StartAnim(double fromW, double fromH, double toW, double toH, bool expanding)
         {
             animating = true;
             animExpanding = expanding;
-            animFrom = from;
-            animTo = to;
+            animFromW = fromW;
+            animFromH = fromH;
+            animToW = toW;
+            animToH = toH;
             animStart = DateTime.Now;
             if (core.Config.AnimationMs <= 0)
             {
@@ -514,19 +533,20 @@ namespace CampusClock
         private void ApplyAnimFrame(double p)
         {
             double eased = 1 - Math.Pow(1 - p, 3);
-            double size = animFrom + (animTo - animFrom) * eased;
-            Width = size;
-            Height = size;
+            double w = animFromW + (animToW - animFromW) * eased;
+            double h = animFromH + (animToH - animFromH) * eased;
+            Width = w;
+            Height = h;
             Rect work = WorkArea();
-            double left = expandRight ? anchorLeft : anchorLeft + anchorW - size;
-            double top = expandDown ? anchorTop : anchorTop + anchorH - size;
+            double left = expandRight ? anchorLeft : anchorLeft + anchorW - w;
+            double top = expandDown ? anchorTop : anchorTop + anchorH - h;
             if (left < work.Left) left = work.Left;
             if (top < work.Top) top = work.Top;
-            if (left + size > work.Right) left = work.Right - size;
-            if (top + size > work.Bottom) top = work.Bottom - size;
+            if (left + w > work.Right) left = work.Right - w;
+            if (top + h > work.Bottom) top = work.Bottom - h;
             Left = left;
             Top = top;
-            if (size > 110 && bodyHost != null && bodyHost.Content == null && animExpanding)
+            if (w > 110 && h > 110 && bodyHost != null && bodyHost.Content == null && animExpanding)
             {
                 RefreshContent();
             }
@@ -554,9 +574,8 @@ namespace CampusClock
             expandedLayer.Visibility = Visibility.Collapsed;
             collapsed.Visibility = Visibility.Visible;
             shell.CornerRadius = new CornerRadius(BallRadius());
-            double ball = core.Config.BallSize;
-            Width = ball;
-            Height = ball;
+            Width = BallWidth();
+            Height = BallHeight();
             Left = anchorLeft;
             Top = anchorTop;
         }

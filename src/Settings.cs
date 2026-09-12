@@ -232,7 +232,8 @@ namespace CampusClock
                 Apply();
             };
             valueBall.Text = core.Config.BallSize.ToString(CultureInfo.InvariantCulture) + " px";
-            AddRow(ballSec, "悬浮球尺寸", "收起状态下的直径", SliderGroup(ballSize, valueBall));
+            AddRow(ballSec, "悬浮球尺寸", "收起状态下的高度；宽度按 1.6 倍加宽，左右两块各占一半",
+                SliderGroup(ballSize, valueBall));
 
             valueExpand = Ui.Text("", 12.5, Palette.Accent);
             MiniSlider expandSize = new MiniSlider(8, 45, core.Config.ExpandAreaPercent, 1);

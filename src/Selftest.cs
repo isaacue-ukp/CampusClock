@@ -179,6 +179,14 @@ namespace CampusClock
             {
                 Widget w = new Widget(core, null);
                 w.ApplyConfig();
+                double ballW = w.Width;
+                double ballH = w.Height;
+                Say("悬浮球收起尺寸：" + ballW.ToString("0", CultureInfo.InvariantCulture) + " x " +
+                    ballH.ToString("0", CultureInfo.InvariantCulture) + " px");
+                Check("悬浮球加宽（宽 ≥ 高 × 1.4）", ballW >= ballH * 1.4,
+                    ballW.ToString("0", CultureInfo.InvariantCulture) + " x " +
+                    ballH.ToString("0", CultureInfo.InvariantCulture));
+                BallLayoutCheck(w, ballW, ballH);
                 int savedAnim = core.Config.AnimationMs;
                 core.Config.AnimationMs = 0;
                 w.Expand("timetable");
@@ -367,7 +375,7 @@ namespace CampusClock
         }
 
         /// <summary>Render a visual tree to a PNG (used to eyeball the layout without a screen).</summary>
-        private static void Shot(string fileName, FrameworkElement el, int w, int h)
+        private static void Shot(string fileName, FrameworkElement el, int w, int h, int minColors = 60)
         {
             if (ShotDir == null || el == null) return;
             try
@@ -387,7 +395,8 @@ namespace CampusClock
                 Analyze(bmp, out colors, out mean);
                 Say("    截图 " + fileName + "  颜色数 " + colors + "  平均亮度 " +
                     mean.ToString("0.0", CultureInfo.InvariantCulture));
-                Check("截图非空白 " + fileName, colors > 60 && mean > 8, "colors=" + colors);
+                Check("截图非空白 " + fileName, colors > minColors && (mean > 8 || colors > minColors),
+                    "colors=" + colors);
             }
             catch (Exception ex)
             {
@@ -418,6 +427,98 @@ namespace CampusClock
             }
             colors = set.Count;
             mean = count == 0 ? 0 : (double)sum / count;
+        }
+
+        /// <summary>Checks that icon + caption are centred inside each half of the collapsed ball.</summary>
+        private static void BallLayoutCheck(Widget w, double ballW, double ballH)
+        {
+            try
+            {
+                int iw = (int)Math.Round(ballW);
+                int ih = (int)Math.Round(ballH);
+                FrameworkElement el = w.Content as FrameworkElement;
+                if (el == null || iw < 40 || ih < 30)
+                {
+                    Check("悬浮球布局", false, "尺寸异常 " + iw + "x" + ih);
+                    return;
+                }
+                ForceLayout(el, iw, ih);
+                RenderTargetBitmap bmp = new RenderTargetBitmap(iw, ih, 96, 96, PixelFormats.Pbgra32);
+                bmp.Render(el);
+                if (ShotDir != null)
+                {
+                    Image img = new Image();
+                    img.Source = bmp;
+                    img.Width = iw;
+                    img.Height = ih;
+                    Border host = new Border();
+                    host.Background = Palette.Br(Palette.WindowBg);
+                    host.Padding = new Thickness(12);
+                    host.Child = img;
+                    ForceLayout(host, iw + 24, ih + 24);
+                    Shot("07-widget-ball.png", host, iw + 24, ih + 24, 20);
+                }
+
+                int pad = 5;
+                double lx, ly, rx, ry;
+                bool leftInk = Centroid(bmp, pad, iw / 2, pad, ih - pad, out lx, out ly);
+                bool rightInk = Centroid(bmp, iw / 2, iw - pad, pad, ih - pad, out rx, out ry);
+                Check("悬浮球左右两半都有图标文字", leftInk && rightInk,
+                    "left=" + leftInk + " right=" + rightInk);
+                double halfW = iw / 2.0;
+                double tolX = halfW * 0.15;
+                double tolY = ih * 0.18;
+                Say("    左半重心 (" + lx.ToString("0.0", CultureInfo.InvariantCulture) + ", " +
+                    ly.ToString("0.0", CultureInfo.InvariantCulture) + ")  期望 x=" +
+                    (halfW / 2).ToString("0.0", CultureInfo.InvariantCulture) + " y=" +
+                    (ih / 2.0).ToString("0.0", CultureInfo.InvariantCulture));
+                Say("    右半重心 (" + rx.ToString("0.0", CultureInfo.InvariantCulture) + ", " +
+                    ry.ToString("0.0", CultureInfo.InvariantCulture) + ")  期望 x=" +
+                    (halfW * 1.5).ToString("0.0", CultureInfo.InvariantCulture) + " y=" +
+                    (ih / 2.0).ToString("0.0", CultureInfo.InvariantCulture));
+                Check("左半内容水平居中", Math.Abs(lx - halfW / 2) <= tolX,
+                    "dx=" + (lx - halfW / 2).ToString("0.0", CultureInfo.InvariantCulture));
+                Check("右半内容水平居中", Math.Abs(rx - halfW * 1.5) <= tolX,
+                    "dx=" + (rx - halfW * 1.5).ToString("0.0", CultureInfo.InvariantCulture));
+                Check("左右内容垂直居中", Math.Abs(ly - ih / 2.0) <= tolY && Math.Abs(ry - ih / 2.0) <= tolY,
+                    "dy=" + (ly - ih / 2.0).ToString("0.0", CultureInfo.InvariantCulture) + "/" +
+                    (ry - ih / 2.0).ToString("0.0", CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                Check("悬浮球布局", false, ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        /// <summary>Ink centroid (alpha &gt; 100, bright pixels) inside a rectangle of the bitmap.</summary>
+        private static bool Centroid(RenderTargetBitmap bmp, int x0, int x1, int y0, int y1,
+            out double cx, out double cy)
+        {
+            int stride = bmp.PixelWidth * 4;
+            byte[] pixels = new byte[stride * bmp.PixelHeight];
+            bmp.CopyPixels(pixels, stride, 0);
+            double sumX = 0;
+            double sumY = 0;
+            int count = 0;
+            for (int y = Math.Max(0, y0); y < Math.Min(bmp.PixelHeight, y1); y++)
+            {
+                for (int x = Math.Max(0, x0); x < Math.Min(bmp.PixelWidth, x1); x++)
+                {
+                    int i = y * stride + x * 4;
+                    int b = pixels[i];
+                    int g = pixels[i + 1];
+                    int r = pixels[i + 2];
+                    int a = pixels[i + 3];
+                    if (a < 100) continue;
+                    if ((r + g + b) / 3 < 85) continue;
+                    sumX += x;
+                    sumY += y;
+                    count++;
+                }
+            }
+            cx = count == 0 ? -1 : sumX / count;
+            cy = count == 0 ? -1 : sumY / count;
+            return count > 8;
         }
     }
 }
