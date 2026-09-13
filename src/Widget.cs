@@ -51,10 +51,13 @@ namespace CampusClock
         private bool allowClose;
 
         private bool dragging;
-        private Point dragOrigin;
-        private double dragLeft;
-        private double dragTop;
+        private Point dragOrigin;        // pointer offset inside the window when the drag started
         private bool dragMoved;
+        private bool suppressHoverExpand;   // set when the user collapses while the pointer is still inside
+        private DispatcherTimer disarmTimer;   // polls the real pointer position until it has left the widget
+        private bool simMode;               // --selftest only: replaces IsMouseOver / Mouse.LeftButton
+        private bool simPointerInside;
+        private bool simButtonDown;
 
         private string pane = "timetable";
         private bool contentDirty = true;
@@ -96,17 +99,22 @@ namespace CampusClock
 
             collapseTimer = new DispatcherTimer();
             collapseTimer.Interval = TimeSpan.FromMilliseconds(420);
-            collapseTimer.Tick += delegate
-            {
-                collapseTimer.Stop();
-                if (!IsMouseOver && !IsKeyboardFocusWithin && !core.Config.BallPinned && !dragging)
-                {
-                    Collapse();
-                }
-            };
+            collapseTimer.Tick += delegate { OnCollapseTimerTick(); };
+
+            // Safety net for the "closed under the pointer" state: it is cleared by the real pointer
+            // position, not by a MouseLeave event (resizing the window produces spurious leave/enter pairs).
+            disarmTimer = new DispatcherTimer();
+            disarmTimer.Interval = TimeSpan.FromMilliseconds(400);
+            disarmTimer.Tick += delegate { OnDisarmTimerTick(); };
+
+            // The drag lifecycle lives on the window: the window is the element that holds the mouse
+            // capture, so children stop receiving move/up events as soon as capture is taken.
+            AddHandler(UIElement.MouseMoveEvent, new MouseEventHandler(OnPointerMove), true);
+            AddHandler(UIElement.MouseLeftButtonUpEvent, new MouseButtonEventHandler(OnPointerUp), true);
+            AddHandler(UIElement.LostMouseCaptureEvent, new MouseEventHandler(OnLostMouseCapture), true);
 
             ApplyConfig();
-            MouseLeave += delegate { ScheduleCollapse(); };
+            MouseLeave += delegate { OnPointerLeaveWidget(); };
             Deactivated += delegate { ScheduleCollapse(); };
         }
 
@@ -177,18 +185,15 @@ namespace CampusClock
             half.Child = sp;
             Grid.SetColumn(half, left ? 0 : 1);
 
-            bool hovered = false;
             half.MouseEnter += delegate
             {
-                hovered = true;
                 half.Background = Palette.Br(Palette.Alpha(Palette.Accent, 0.22));
                 icon.Foreground = Palette.Br(Palette.Accent);
                 caption.Foreground = Palette.Br(Palette.Accent);
-                if (!expanded && !animating) Expand(left ? "timetable" : "homework");
+                TryHoverExpand(left);
             };
             half.MouseLeave += delegate
             {
-                hovered = false;
                 half.Background = Palette.Br(Colors.Transparent);
                 icon.Foreground = Palette.Br(Palette.TextSecondary);
                 caption.Foreground = Palette.Br(Palette.TextMuted);
@@ -196,14 +201,10 @@ namespace CampusClock
             };
             half.MouseLeftButtonDown += delegate (object s, MouseButtonEventArgs e)
             {
-                if (!expanded && !animating)
-                {
-                    Expand(left ? "timetable" : "homework");
-                }
-                StartDrag(e);
+                // Do not expand here: we only know whether this is a click or a drag after mouse-up.
+                BeginDrag(e.GetPosition(this));
+                e.Handled = true;
             };
-            half.MouseMove += delegate (object s, MouseEventArgs e) { ContinueDrag(e); };
-            half.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e) { EndDrag(e); };
             return half;
         }
 
@@ -227,10 +228,9 @@ namespace CampusClock
             header.MouseLeftButtonDown += delegate (object s, MouseButtonEventArgs e)
             {
                 if (IsInteractive(e.OriginalSource)) return;
-                StartDrag(e);
+                BeginDrag(e.GetPosition(this));
+                e.Handled = true;
             };
-            header.MouseMove += delegate (object s, MouseEventArgs e) { ContinueDrag(e); };
-            header.MouseLeftButtonUp += delegate (object s, MouseButtonEventArgs e) { EndDrag(e); };
 
             Grid hg = new Grid();
             hg.Margin = new Thickness(8, 0, 6, 0);
@@ -449,6 +449,7 @@ namespace CampusClock
         public void Expand(string which)
         {
             if (animating) return;
+            if (disarmTimer != null) disarmTimer.Stop();
             pane = which;
             core.Config.BallPane = pane;
             collapseTimer.Stop();
@@ -479,6 +480,10 @@ namespace CampusClock
         {
             if (animating) return;
             if (!expanded) return;
+            // Closing always disarms the widget: it stays closed until the pointer has really left the
+            // widget, so a single ✕ click can never collapse-and-reopen (the reported behaviour).
+            suppressHoverExpand = true;
+            if (disarmTimer != null) disarmTimer.Start();
             double ballW = BallWidth();
             double ballH = BallHeight();
             // keep the ball near where the panel was
@@ -504,10 +509,7 @@ namespace CampusClock
             if (core.Config.AnimationMs <= 0)
             {
                 ApplyAnimFrame(1.0);
-                animating = false;
-                expanded = expanding;
-                if (!expanding) FinishCollapse();
-                else FinishExpand();
+                CompleteAnimation();
                 return;
             }
             animTimer.Start();
@@ -521,13 +523,19 @@ namespace CampusClock
             {
                 animTimer.Stop();
                 ApplyAnimFrame(1.0);
-                animating = false;
-                expanded = animExpanding;
-                if (animExpanding) FinishExpand();
-                else FinishCollapse();
+                CompleteAnimation();
                 return;
             }
             ApplyAnimFrame(p);
+        }
+
+        /// <summary>Ends the running expand / collapse animation and applies its final state.</summary>
+        private void CompleteAnimation()
+        {
+            animating = false;
+            expanded = animExpanding;
+            if (animExpanding) FinishExpand();
+            else FinishCollapse();
         }
 
         private void ApplyAnimFrame(double p)
@@ -557,7 +565,7 @@ namespace CampusClock
             expanded = true;
             RefreshContent();
             opacityFix();
-            if (!IsMouseOver && !IsKeyboardFocusWithin && !core.Config.BallPinned)
+            if (!PointerInside && !IsKeyboardFocusWithin && !core.Config.BallPinned)
             {
                 ScheduleCollapse();
             }
@@ -578,12 +586,96 @@ namespace CampusClock
             Height = BallHeight();
             Left = anchorLeft;
             Top = anchorTop;
+            // if the pointer ended up outside the collapsed ball, the widget is immediately usable again
+            RearmIfPointerLeft();
+        }
+
+        private bool ButtonIsDown
+        {
+            get { return simMode ? simButtonDown : Mouse.LeftButton == MouseButtonState.Pressed; }
+        }
+
+        private bool PointerInside
+        {
+            get { return simMode ? simPointerInside : IsMouseOver; }
+        }
+
+        /// <summary>True when the pointer is outside the widget's own bounds (geometry based, not event based).</summary>
+        private bool PointerOutsideBounds()
+        {
+            if (simMode) return !simPointerInside;
+            try
+            {
+                Point p = Mouse.GetPosition(this);
+                double w = ActualWidth > 1 ? ActualWidth : Width;
+                double h = ActualHeight > 1 ? ActualHeight : Height;
+                return p.X < -0.5 || p.Y < -0.5 || p.X > w + 0.5 || p.Y > h + 0.5;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        /// <summary>Re-arms the widget only once the pointer has really left it.</summary>
+        private void RearmIfPointerLeft()
+        {
+            if (!suppressHoverExpand) return;
+            if (animating) return;                 // geometry is still changing: ignore spurious events
+            if (!PointerOutsideBounds()) return;   // pointer is still on the widget: keep it closed
+            suppressHoverExpand = false;
+            if (disarmTimer != null) disarmTimer.Stop();
+        }
+
+        private void OnDisarmTimerTick()
+        {
+            if (!suppressHoverExpand)
+            {
+                disarmTimer.Stop();
+                return;
+            }
+            RearmIfPointerLeft();
+        }
+
+        /// <summary>Hover on one half of the ball. Refuses while the panel is busy or was just closed by the user.</summary>
+        private void TryHoverExpand(bool left)
+        {
+            if (expanded || animating) return;
+            if (dragging)
+            {
+                if (ButtonIsDown) return;   // a real drag is in progress
+                CancelDrag();               // stale drag state: recover instead of blocking expansion forever
+            }
+            if (suppressHoverExpand) return;
+            Expand(left ? "timetable" : "homework");
+        }
+
+        private void OnPointerLeaveWidget()
+        {
+            // only a real departure re-arms the widget (a resizing window fires leave/enter pairs)
+            RearmIfPointerLeft();
+            ScheduleCollapse();
+        }
+
+        private void OnCollapseTimerTick()
+        {
+            collapseTimer.Stop();
+            if (dragging && !ButtonIsDown) CancelDrag();
+            if (!PointerInside && !IsKeyboardFocusWithin && !core.Config.BallPinned && !dragging)
+            {
+                Collapse();
+            }
         }
 
         private void ScheduleCollapse()
         {
             if (!expanded || core.Config.BallPinned) return;
             if (IsKeyboardFocusWithin) return;
+            if (dragging)
+            {
+                if (ButtonIsDown) return;   // genuine drag: keep the panel while the user moves it
+                CancelDrag();               // stale drag state must not block auto-collapse
+            }
             collapseTimer.Stop();
             collapseTimer.Start();
         }
@@ -728,67 +820,204 @@ namespace CampusClock
             return card;
         }
 
-        private void StartDrag(MouseButtonEventArgs e)
+        private void BeginDrag(Point positionInWindow)
         {
             dragging = true;
             dragMoved = false;
-            dragOrigin = e.GetPosition(this);
-            dragLeft = Left;
-            dragTop = Top;
-            CaptureMouse();
-            e.Handled = true;
+            dragOrigin = positionInWindow;
+            if (!IsMouseCaptured)
+            {
+                try { CaptureMouse(); } catch { }
+            }
         }
 
-        private void ContinueDrag(MouseEventArgs e)
+        private void OnPointerMove(object sender, MouseEventArgs e)
         {
             if (!dragging) return;
-            Point p = e.GetPosition(this);
-            double dx = p.X - dragOrigin.X;
-            double dy = p.Y - dragOrigin.Y;
+            PointerMoved(e.GetPosition(this));
+        }
+
+        private void PointerMoved(Point positionInWindow)
+        {
+            if (!dragging) return;
+            if (!ButtonIsDown)
+            {
+                // the button-up was swallowed (capture lost, window switched, …): never stay stuck in dragging
+                CancelDrag();
+                return;
+            }
+            DragTo(positionInWindow);
+        }
+
+        /// <summary>
+        /// Moves the window so that the pointer keeps its offset inside the window.
+        /// <para>
+        /// The pointer position is reported relative to the window, and the window itself moves,
+        /// so the baseline must be the <b>current</b> window position. Using the position captured
+        /// at mouse-down (the old code) double-counts the movement already applied: the window then
+        /// advances, stalls, advances … and jitters back and forth when the pointer wiggles.
+        /// </para>
+        /// </summary>
+        private void DragTo(Point positionInWindow)
+        {
+            if (!dragging) return;
+            double dx = positionInWindow.X - dragOrigin.X;
+            double dy = positionInWindow.Y - dragOrigin.Y;
             if (!dragMoved && (Math.Abs(dx) > 4 || Math.Abs(dy) > 4)) dragMoved = true;
             if (!dragMoved) return;
-            Rect work = WorkArea();
-            double nl = dragLeft + dx;
-            double nt = dragTop + dy;
-            nl = Math.Max(work.Left - 4, Math.Min(work.Right - Width + 4, nl));
-            nt = Math.Max(work.Top - 4, Math.Min(work.Bottom - Height + 4, nt));
-            Left = nl;
-            Top = nt;
+            MoveWindowTo(Left + dx, Top + dy);
         }
 
-        private void EndDrag(MouseButtonEventArgs e)
+        private void MoveWindowTo(double left, double top)
+        {
+            Rect work = WorkArea();
+            left = Math.Max(work.Left - 4, Math.Min(work.Right - Width + 4, left));
+            top = Math.Max(work.Top - 4, Math.Min(work.Bottom - Height + 4, top));
+            Left = left;
+            Top = top;
+        }
+
+        private void OnPointerUp(object sender, MouseButtonEventArgs e)
         {
             if (!dragging) return;
-            dragging = false;
-            ReleaseMouseCapture();
-            if (dragMoved)
+            EndDrag();
+            e.Handled = true;
+        }
+
+        private void OnLostMouseCapture(object sender, MouseEventArgs e)
+        {
+            if (dragging) CancelDrag();
+        }
+
+        private void EndDrag()
+        {
+            bool moved = dragMoved;
+            ResetDragState();
+            if (moved)
             {
-                if (expanded)
-                {
-                    anchorLeft = expandRight ? Left : Left;
-                    anchorTop = expandDown ? Top : Top;
-                    anchorW = Width;
-                    anchorH = Height;
-                }
-                else
-                {
-                    core.Config.BallLeft = (int)Math.Round(Left);
-                    core.Config.BallTop = (int)Math.Round(Top);
-                    core.SaveConfig();
-                    anchorLeft = Left;
-                    anchorTop = Top;
-                }
+                PersistPosition();
+                // a drag is an explicit interaction: the panel may be opened again by hovering
+                suppressHoverExpand = false;
+                if (disarmTimer != null) disarmTimer.Stop();
             }
-            else if (!expanded && !animating)
+            else if (!expanded && !animating && !suppressHoverExpand)
             {
+                // a click without movement on the ball opens the panel (only while the widget is armed)
                 Expand(pane);
             }
-            e.Handled = true;
+        }
+
+        private void CancelDrag()
+        {
+            bool moved = dragMoved;
+            ResetDragState();
+            if (moved) PersistPosition();
+        }
+
+        private void ResetDragState()
+        {
+            dragging = false;
+            dragMoved = false;
+            if (IsMouseCaptured)
+            {
+                try { ReleaseMouseCapture(); } catch { }
+            }
+        }
+
+        private void PersistPosition()
+        {
+            if (expanded)
+            {
+                anchorLeft = Left;
+                anchorTop = Top;
+                anchorW = Width;
+                anchorH = Height;
+            }
+            else
+            {
+                core.Config.BallLeft = (int)Math.Round(Left);
+                core.Config.BallTop = (int)Math.Round(Top);
+                core.SaveConfig();
+                anchorLeft = Left;
+                anchorTop = Top;
+            }
         }
 
         public void AllowClose()
         {
             allowClose = true;
+        }
+
+        // ------------------------------------------------------------------
+        // Simulation hooks. They drive exactly the same methods the real mouse
+        // handlers use, so --selftest can verify the interaction state machine
+        // without a physical mouse. Not used by the application itself.
+        // ------------------------------------------------------------------
+
+        public bool SimExpanded { get { return expanded; } }
+        public bool SimAnimating { get { return animating; } }
+        public bool SimDragging { get { return dragging; } }
+        public bool SimDragMoved { get { return dragMoved; } }
+        public bool SimSuppressHoverExpand { get { return suppressHoverExpand; } }
+        public bool SimMouseCaptured { get { return IsMouseCaptured; } }
+        public double SimLeft { get { return Left; } }
+        public double SimTop { get { return Top; } }
+
+        public void SimEnable() { simMode = true; }
+
+        public void SimSetPointerInside(bool inside)
+        {
+            simMode = true;
+            simPointerInside = inside;
+        }
+
+        public void SimSetButtonDown(bool down)
+        {
+            simMode = true;
+            simButtonDown = down;
+        }
+
+        public void SimHover(bool left) { TryHoverExpand(left); }
+
+        public void SimPointerDownOnBall()
+        {
+            BeginDrag(new Point(BallWidth() / 2, BallHeight() / 2));
+        }
+
+        public void SimPointerDownAt(double x, double y)
+        {
+            BeginDrag(new Point(x, y));
+        }
+
+        /// <summary>Finishes a running expand / collapse animation (the self-test has no dispatcher ticks).</summary>
+        public void SimRunAnimationToEnd()
+        {
+            if (animating) CompleteAnimation();
+        }
+
+        public void SimDisarmTimerTick() { OnDisarmTimerTick(); }
+
+        public void SimPointerDownOnHeader()
+        {
+            BeginDrag(new Point(20, 20));
+        }
+
+        public void SimPointerMove(double x, double y) { PointerMoved(new Point(x, y)); }
+
+        public void SimPointerUp() { EndDrag(); }
+
+        public void SimLostCapture() { CancelDrag(); }
+
+        public void SimLeaveWidget() { OnPointerLeaveWidget(); }
+
+        public void SimCollapseTimer() { OnCollapseTimerTick(); }
+
+        public void SimCollapseClick() { Collapse(); }
+
+        public void SimSetPinned(bool pinned)
+        {
+            core.Config.BallPinned = pinned;
+            UpdatePin();
         }
     }
 }

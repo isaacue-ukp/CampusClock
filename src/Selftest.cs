@@ -208,6 +208,8 @@ namespace CampusClock
                 Check("悬浮球构建", false, ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace);
             }
 
+            WidgetInteractionCheck(core);
+
             try
             {
                 System.Drawing.Icon ico = TrayIcon.CreateIcon(32);
@@ -488,6 +490,281 @@ namespace CampusClock
             {
                 Check("悬浮球布局", false, ex.GetType().Name + ": " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Drives the floating widget through the interaction scenarios that used to break
+        /// (expand / close / hover again / click while expanded / drag / lost mouse-up).
+        /// </summary>
+        private static void WidgetInteractionCheck(AppCore core)
+        {
+            Say("");
+            Say("—— 悬浮球交互状态机 ——");
+            int savedAnim = core.Config.AnimationMs;
+            bool savedPinned = core.Config.BallPinned;
+            int savedLeft = core.Config.BallLeft;
+            int savedTop = core.Config.BallTop;
+            core.Config.AnimationMs = 0;      // expand/collapse complete synchronously in the test
+            core.Config.BallPinned = false;
+            Rect work = SystemParameters.WorkArea;
+            try
+            {
+                Widget w = new Widget(core, null);
+                w.SimEnable();
+                PlaceBall(core, w, work.Left + 60, work.Top + 60);
+
+                // 1. 悬停展开
+                w.SimSetPointerInside(true);
+                w.SimHover(true);
+                Check("① 悬停展开", w.SimExpanded && !w.SimDragging,
+                    "expanded=" + w.SimExpanded + " dragging=" + w.SimDragging);
+
+                // 2. 展开后点击关闭按钮
+                w.SimCollapseClick();
+                Check("② 点击关闭按钮后收起", !w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // 3. 关闭后指针停留在原处，不应被同一个 hover 再次展开
+                Check("③ 关闭时设置了悬停抑制", w.SimSuppressHoverExpand,
+                    "suppress=" + w.SimSuppressHoverExpand);
+                w.SimHover(true);
+                w.SimHover(false);
+                Check("③ 指针未离开时不会重新展开", !w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // 4. 指针离开后再悬停，应能正常展开
+                w.SimSetPointerInside(false);   // 真正离开控件范围
+                w.SimLeaveWidget();             // 离开事件
+                w.SimSetPointerInside(true);
+                w.SimHover(false);
+                Check("④ 离开后再次悬停可展开", w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // 5. 展开状态下点击标题栏（无位移）：不得留下拖拽/捕获状态
+                w.SimSetButtonDown(true);
+                w.SimPointerDownOnHeader();
+                w.SimPointerUp();
+                w.SimSetButtonDown(false);
+                Check("⑤ 展开态点击后无残留拖拽状态",
+                    !w.SimDragging && !w.SimMouseCaptured && w.SimExpanded,
+                    "dragging=" + w.SimDragging + " captured=" + w.SimMouseCaptured);
+
+                // 6. 鼠标快速移出 → 定时器触发自动收起
+                w.SimSetPointerInside(false);
+                w.SimCollapseTimer();
+                Check("⑥ 指针移出后自动收起", !w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // 根因演示：同一串光标移动，旧公式（基准 = 按下时的 Left）会“走一步停一步”
+                Say("    旧公式 8 步 位置：" + DragTrack(1000, false));
+                Say("    新公式 8 步 位置：" + DragTrack(1000, true));
+
+                // 7/8/9. 拖拽：光标在屏幕坐标里每步走 (5,2)，窗口相对坐标按窗口当前位置换算
+                PlaceBall(core, w, work.Left + 60, work.Top + 60);
+                double grabX = 51;
+                double grabY = 32;
+                double cursorX = w.SimLeft + grabX;
+                double cursorY = w.SimTop + grabY;
+                double x0 = w.SimLeft;
+                double y0 = w.SimTop;
+                w.SimSetButtonDown(true);
+                w.SimPointerDownAt(grabX, grabY);
+                bool monotonic = true;
+                double prev = x0;
+                for (int i = 1; i <= 20; i++)
+                {
+                    cursorX += 5;
+                    cursorY += 2;
+                    w.SimPointerMove(cursorX - w.SimLeft, cursorY - w.SimTop);
+                    if (w.SimLeft < prev - 0.001) monotonic = false;
+                    prev = w.SimLeft;
+                }
+                w.SimPointerUp();
+                w.SimSetButtonDown(false);
+                double dx = w.SimLeft - x0;
+                double dy = w.SimTop - y0;
+                Check("⑦ 多步拖拽位移精确 (100, 40)",
+                    Math.Abs(dx - 100) < 0.6 && Math.Abs(dy - 40) < 0.6,
+                    "dx=" + dx.ToString("0.0", CultureInfo.InvariantCulture) +
+                    " dy=" + dy.ToString("0.0", CultureInfo.InvariantCulture));
+                Check("⑧ 拖拽过程单调无抖动（无往复）", monotonic);
+                Check("⑨ 拖拽结束后状态干净",
+                    !w.SimDragging && !w.SimMouseCaptured && w.SimDragMoved == false,
+                    "dragging=" + w.SimDragging + " captured=" + w.SimMouseCaptured);
+
+                // 10. 长距离拖拽
+                PlaceBall(core, w, work.Left + 60, work.Top + 60);
+                cursorX = w.SimLeft + grabX;
+                cursorY = w.SimTop + grabY;
+                w.SimSetButtonDown(true);
+                w.SimPointerDownAt(grabX, grabY);
+                x0 = w.SimLeft;
+                y0 = w.SimTop;
+                for (int i = 1; i <= 40; i++)
+                {
+                    cursorX += 10;
+                    cursorY += 5;
+                    w.SimPointerMove(cursorX - w.SimLeft, cursorY - w.SimTop);
+                }
+                w.SimPointerUp();
+                w.SimSetButtonDown(false);
+                Check("⑩ 长距离拖拽位移精确 (400, 200)",
+                    Math.Abs((w.SimLeft - x0) - 400) < 0.6 && Math.Abs((w.SimTop - y0) - 200) < 0.6,
+                    "dx=" + (w.SimLeft - x0).ToString("0.0", CultureInfo.InvariantCulture) +
+                    " dy=" + (w.SimTop - y0).ToString("0.0", CultureInfo.InvariantCulture));
+
+                // 11. 拖拽中丢失 mouse-up（按钮已松开但 up 事件没到）→ 下一次移动必须自愈
+                PlaceBall(core, w, work.Left + 60, work.Top + 60);
+                cursorX = w.SimLeft + grabX;
+                cursorY = w.SimTop + grabY;
+                w.SimSetButtonDown(true);
+                w.SimPointerDownAt(grabX, grabY);
+                cursorX += 60;
+                cursorY += 30;
+                w.SimPointerMove(cursorX - w.SimLeft, cursorY - w.SimTop);
+                w.SimSetButtonDown(false);
+                cursorX += 20;
+                cursorY += 10;
+                w.SimPointerMove(cursorX - w.SimLeft, cursorY - w.SimTop);
+                Check("⑪ 丢失 mouse-up 后自动解除拖拽状态",
+                    !w.SimDragging && !w.SimMouseCaptured,
+                    "dragging=" + w.SimDragging + " captured=" + w.SimMouseCaptured);
+                w.SimSetPointerInside(true);
+                w.SimHover(true);
+                w.SimSetPointerInside(false);
+                w.SimCollapseTimer();
+                Check("⑪ 自愈后自动收起仍然生效", !w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // 12. 拖拽之后继续点击悬浮球，应能正常展开
+                w.SimSetButtonDown(true);
+                w.SimPointerDownOnBall();
+                w.SimPointerUp();
+                w.SimSetButtonDown(false);
+                Check("⑫ 拖拽后点击悬浮球可展开", w.SimExpanded && !w.SimDragging,
+                    "expanded=" + w.SimExpanded + " dragging=" + w.SimDragging);
+
+                // 13. 连续多轮 展开 → 收起 → 拖拽，状态保持一致
+                bool loopOk = true;
+                for (int i = 0; i < 5 && loopOk; i++)
+                {
+                    w.SimSetPointerInside(true);
+                    w.SimHover(true);
+                    loopOk = loopOk && w.SimExpanded;
+                    w.SimSetPointerInside(false);
+                    w.SimCollapseTimer();
+                    loopOk = loopOk && !w.SimExpanded;
+                    cursorX = w.SimLeft + grabX;
+                    cursorY = w.SimTop + grabY;
+                    w.SimSetButtonDown(true);
+                    w.SimPointerDownAt(grabX, grabY);
+                    cursorX += 10;
+                    cursorY += 5;
+                    w.SimPointerMove(cursorX - w.SimLeft, cursorY - w.SimTop);
+                    cursorX += 10;
+                    cursorY += 5;
+                    w.SimPointerMove(cursorX - w.SimLeft, cursorY - w.SimTop);
+                    w.SimPointerUp();
+                    w.SimSetButtonDown(false);
+                    loopOk = loopOk && !w.SimDragging && !w.SimMouseCaptured;
+                }
+                Check("⑬ 连续 5 轮 展开/收起/拖拽 状态一致", loopOk,
+                    "dragging=" + w.SimDragging + " captured=" + w.SimMouseCaptured);
+
+                // ⑭ 回归：收起动画期间窗口几何变化会放出"假的 MouseLeave"，
+                //     上一版就是被它解除了抑制，导致 ✕ 之后立刻又展开。现在必须只在指针真的离开后才解除。
+                core.Config.AnimationMs = 200;      // 让收起处于"动画进行中"状态
+                PlaceBall(core, w, work.Left + 60, work.Top + 60);
+                w.SimSetPointerInside(true);
+                w.SimHover(true);
+                w.SimRunAnimationToEnd();
+                Check("⑭ 准备：已展开", w.SimExpanded && !w.SimAnimating,
+                    "expanded=" + w.SimExpanded + " animating=" + w.SimAnimating);
+                w.SimCollapseClick();
+                Check("⑭ 点击 ✕ 后进入收起动画并进入收兵状态",
+                    w.SimAnimating && w.SimSuppressHoverExpand,
+                    "animating=" + w.SimAnimating + " disarmed=" + w.SimSuppressHoverExpand);
+                w.SimSetPointerInside(false);
+                w.SimLeaveWidget();                              // 动画中的假离开
+                Check("⑭ 动画中的假离开不解除收兵", w.SimSuppressHoverExpand,
+                    "disarmed=" + w.SimSuppressHoverExpand);
+                w.SimSetPointerInside(true);                     // 指针其实一直停在胶囊上
+                w.SimRunAnimationToEnd();
+                Check("⑭ 收起完成后仍保持收兵且未展开",
+                    !w.SimExpanded && w.SimSuppressHoverExpand,
+                    "expanded=" + w.SimExpanded + " disarmed=" + w.SimSuppressHoverExpand);
+                w.SimHover(true);
+                w.SimHover(false);
+                Check("⑭ 指针未真正离开时不会被重新展开", !w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // ⑮ 收兵状态下点击胶囊（等同于"连点两次 ✕"的第二下）也不应立刻展开
+                w.SimSetButtonDown(true);
+                w.SimPointerDownOnBall();
+                w.SimPointerUp();
+                w.SimSetButtonDown(false);
+                Check("⑮ 收兵状态下点击胶囊不会立刻展开", !w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                // 指针真正离开 → 解除收兵 → 下次悬停正常展开
+                w.SimSetPointerInside(false);
+                w.SimDisarmTimerTick();
+                Check("⑭ 指针真正离开后解除收兵", !w.SimSuppressHoverExpand,
+                    "disarmed=" + w.SimSuppressHoverExpand);
+                w.SimSetPointerInside(true);
+                w.SimHover(true);
+                w.SimRunAnimationToEnd();
+                Check("⑭ 离开后再次悬停可展开", w.SimExpanded, "expanded=" + w.SimExpanded);
+                core.Config.AnimationMs = 0;
+                w.SimSetPointerInside(false);
+                w.SimCollapseTimer();
+
+                // ⑯ 指针本来就在窗口外时收起 → 立刻解除收兵，不影响后续悬停
+                Check("⑯ 指针在外时收起后立即解除收兵",
+                    !w.SimExpanded && !w.SimSuppressHoverExpand,
+                    "expanded=" + w.SimExpanded + " disarmed=" + w.SimSuppressHoverExpand);
+                w.SimSetPointerInside(true);
+                w.SimHover(false);
+                w.SimRunAnimationToEnd();
+                Check("⑯ 随后悬停可正常展开", w.SimExpanded, "expanded=" + w.SimExpanded);
+
+                w.AllowClose();
+                w.Close();
+            }
+            catch (Exception ex)
+            {
+                Check("悬浮球交互状态机", false, ex.GetType().Name + ": " + ex.Message + "\n" + ex.StackTrace);
+            }
+            finally
+            {
+                core.Config.AnimationMs = savedAnim;
+                core.Config.BallPinned = savedPinned;
+                core.Config.BallLeft = savedLeft;
+                core.Config.BallTop = savedTop;
+            }
+        }
+
+        private static void PlaceBall(AppCore core, Widget w, double left, double top)
+        {
+            core.Config.BallLeft = (int)Math.Round(left);
+            core.Config.BallTop = (int)Math.Round(top);
+            w.ApplyConfig();
+        }
+
+        /// <summary>
+        /// Pure numeric demo of the drag formula. The cursor moves 5px per step on the screen while
+        /// the reported pointer position is window relative, exactly like the real events.
+        /// Old formula (baseline = window position at mouse-down) advances only every other step;
+        /// the fixed formula (baseline = current window position) follows exactly.
+        /// </summary>
+        private static string DragTrack(double startLeft, bool useCurrentBaseline)
+        {
+            double origin = 51;                  // pointer offset inside the window at mouse-down
+            double left = startLeft;
+            double cursor = startLeft + origin;  // screen coordinates
+            StringBuilder sb = new StringBuilder();
+            for (int i = 1; i <= 8; i++)
+            {
+                cursor += 5;
+                double rel = cursor - left;
+                double dx = rel - origin;
+                left = useCurrentBaseline ? left + dx : startLeft + dx;
+                sb.Append(left.ToString("0", CultureInfo.InvariantCulture)).Append(' ');
+            }
+            return sb.ToString().Trim();
         }
 
         /// <summary>Ink centroid (alpha &gt; 100, bright pixels) inside a rectangle of the bitmap.</summary>

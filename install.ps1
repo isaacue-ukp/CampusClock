@@ -16,7 +16,6 @@ foreach ($dir in @($Dest, (Join-Path $Dest 'src'), (Join-Path $Dest 'assets'), (
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 }
 
-Copy-Item (Join-Path $Source 'CampusClock.exe') $Dest -Force
 Copy-Item (Join-Path $Source 'src\*.cs') (Join-Path $Dest 'src') -Force
 Copy-Item (Join-Path $Source 'assets\campusclock.ico') (Join-Path $Dest 'assets') -Force
 Copy-Item (Join-Path $Source 'build.ps1') $Dest -Force
@@ -24,6 +23,19 @@ Copy-Item (Join-Path $Source 'README.md') $Dest -Force
 Copy-Item $PSCommandPath $Dest -Force
 if (Test-Path (Join-Path $Source '.gitignore')) {
     Copy-Item (Join-Path $Source '.gitignore') $Dest -Force
+}
+
+# the executable is copied last: if CampusClock is running the file is locked, and we still
+# want the sources / docs above to be up to date
+$exeSource = Join-Path $Source 'CampusClock.exe'
+$exeDest = Join-Path $Dest 'CampusClock.exe'
+try {
+    Copy-Item $exeSource $exeDest -Force
+    Write-Host "exe updated: $exeDest"
+} catch {
+    Write-Host "WARNING: $exeDest is locked (CampusClock is probably running)."
+    Write-Host "         close the app and run this script again to update the exe."
+    Write-Host "         ($($_.Exception.Message))"
 }
 
 # drop source files that no longer exist in the source tree

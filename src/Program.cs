@@ -16,11 +16,13 @@ namespace CampusClock
         public static void Main(string[] args)
         {
             bool selftest = false;
+            bool uitest = false;
             string makeIcon = null;
             string icsArg = null;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--selftest") selftest = true;
+                else if (args[i] == "--uitest") uitest = true;
                 else if (args[i] == "--shots" && i + 1 < args.Length) Selftest.ShotDir = args[++i];
                 else if (args[i] == "--make-icon" && i + 1 < args.Length) makeIcon = args[++i];
                 else if (args[i] == "--ics" && i + 1 < args.Length) icsArg = args[++i];
@@ -32,6 +34,23 @@ namespace CampusClock
                 Paths.Init();
                 TrayIcon.WriteIco(makeIcon);
                 Console.WriteLine("icon written: " + makeIcon);
+                return;
+            }
+
+            if (uitest)
+            {
+                int uiCode;
+                try
+                {
+                    uiCode = UiTest.Run();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("uitest 崩溃：" + ex);
+                    uiCode = 2;
+                }
+                Environment.ExitCode = uiCode;
+                Console.Out.Flush();
                 return;
             }
 
