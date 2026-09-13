@@ -165,8 +165,11 @@ namespace CampusClock
         private HomeworkItem item;
         private TextBlock course;
         private TextBlock meta;
-        private TextBox box;
+        private TextBox box;          // 作业内容
+        private TextBox methodBox;    // 提交方式（自由文本）
         private TickCircle circle;
+        private Border lastPanel;     // 「上次作业 + 恢复」
+        private TextBlock lastLabel;
         private AppCore core;
         private bool done;
 
@@ -187,8 +190,12 @@ namespace CampusClock
             g.ColumnDefinitions.Add(new ColumnDefinition());
             g.ColumnDefinitions[0].Width = GridLength.Auto;
             g.ColumnDefinitions.Add(new ColumnDefinition());
-            g.ColumnDefinitions[1].Width = new GridLength(190);
+            g.ColumnDefinitions[1].Width = new GridLength(180);
             g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions[3].Width = new GridLength(168);
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions[4].Width = GridLength.Auto;
 
             circle = new TickCircle();
             circle.VerticalAlignment = VerticalAlignment.Top;
@@ -214,6 +221,10 @@ namespace CampusClock
             Grid.SetColumn(head, 1);
             g.Children.Add(head);
 
+            // ---- 作业内容（+ 可恢复的上一次自动清空内容）----
+            StackPanel jobCol = new StackPanel();
+            jobCol.Margin = new Thickness(0, 0, 14, 0);
+            jobCol.Children.Add(Ui.Text("作业内容", 11, Palette.TextMuted));
             box = new TextBox();
             box.AcceptsReturn = true;
             box.TextWrapping = TextWrapping.Wrap;
@@ -223,30 +234,85 @@ namespace CampusClock
             box.FontSize = 13;
             box.FontFamily = Palette.UiFont;
             box.Text = item.Text;
+            box.Margin = new Thickness(0, 4, 0, 0);
             box.TextChanged += delegate
             {
                 item.Text = box.Text;
                 item.Updated = Fmt.DateTimeText(DateTime.Now);
                 core.SaveHomeworkSoon();
             };
-            Grid.SetColumn(box, 2);
-            g.Children.Add(box);
+            jobCol.Children.Add(box);
+
+            StackPanel lastRow = new StackPanel();
+            lastRow.Orientation = Orientation.Horizontal;
+            lastRow.Margin = new Thickness(0, 6, 0, 0);
+            lastLabel = Ui.Text("", 11, Palette.TextMuted);
+            lastLabel.VerticalAlignment = VerticalAlignment.Center;
+            lastLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+            lastRow.Children.Add(lastLabel);
+            TextBtn restore = new TextBtn("恢复", Colors.Transparent, Palette.Hover, Palette.Accent, Palette.Alpha(Palette.Accent, 0.45));
+            restore.Margin = new Thickness(10, 0, 0, 0);
+            restore.VerticalAlignment = VerticalAlignment.Center;
+            restore.ToolTip = "把上一次自动清空前的作业内容填回来（提交方式不受影响）";
+            restore.Clicked += delegate { DoRestore(); };
+            lastRow.Children.Add(restore);
+            lastPanel = new Border();
+            lastPanel.Child = lastRow;
+            lastPanel.Visibility = Visibility.Collapsed;
+            jobCol.Children.Add(lastPanel);
+            Grid.SetColumn(jobCol, 2);
+            g.Children.Add(jobCol);
+
+            // ---- 提交方式：自由文本，独立于作业内容与自动清空 ----
+            StackPanel methodCol = new StackPanel();
+            methodCol.Margin = new Thickness(0, 0, 14, 0);
+            methodCol.Children.Add(Ui.Text("提交方式", 11, Palette.TextMuted));
+            methodBox = new TextBox();
+            methodBox.TextWrapping = TextWrapping.Wrap;
+            methodBox.MinHeight = 56;
+            methodBox.MaxHeight = 150;
+            methodBox.FontSize = 13;
+            methodBox.FontFamily = Palette.UiFont;
+            methodBox.Text = item.Method;
+            methodBox.Margin = new Thickness(0, 4, 0, 0);
+            methodBox.ToolTip = "自由填写：教学网 / Class网 / 邮件 / 微信 / 课堂提交 / 教师指定平台 …（不会被清空）";
+            methodBox.TextChanged += delegate
+            {
+                item.Method = methodBox.Text;    // 只改提交方式
+                item.Updated = Fmt.DateTimeText(DateTime.Now);
+                core.SaveHomeworkSoon();
+            };
+            methodCol.Children.Add(methodBox);
+            Grid.SetColumn(methodCol, 3);
+            g.Children.Add(methodCol);
+
+            // ---- 「更新」：清空正文、开始新一轮；提交方式与历史内容保留 ----
+            TextBtn update = new TextBtn("更新", Palette.Alpha(Palette.Accent, 0.18), Palette.Alpha(Palette.Accent, 0.30), Palette.Accent, Palette.Alpha(Palette.Accent, 0.45));
+            update.VerticalAlignment = VerticalAlignment.Top;
+            update.Margin = new Thickness(0, 20, 0, 0);
+            update.ToolTip = "开始这门课的新一轮作业：清空正文并把「已完成」复位；提交方式与可恢复的上次作业都不受影响";
+            update.Clicked += delegate { DoUpdate(); };
+            Grid.SetColumn(update, 4);
+            g.Children.Add(update);
 
             Child = g;
             done = item.Done;
             circle.IsDone = item.Done;
             ApplyVisual();
+            RefreshLastPanel();
         }
 
-        public void SetExternalText()
+        public void SyncFromModel()
         {
-            box.Text = item.Text;
+            if (box.Text != item.Text) box.Text = item.Text;
+            if (methodBox.Text != item.Method) methodBox.Text = item.Method;
             done = item.Done;
             circle.IsDone = item.Done;
             ApplyVisual();
+            RefreshLastPanel();
         }
 
-        public void UpdateMeta(AppCore core)
+        public void UpdateMeta()
         {
             if (item.LastClearedKey.Length > 0)
             {
@@ -258,6 +324,31 @@ namespace CampusClock
             }
         }
 
+        private void DoUpdate()
+        {
+            core.UpdateHomework(item.Course);
+            SyncFromModel();
+            if (Changed != null) Changed(this, EventArgs.Empty);
+        }
+
+        private void DoRestore()
+        {
+            if (!core.RestoreLastText(item.Course)) return;
+            SyncFromModel();
+            if (Changed != null) Changed(this, EventArgs.Empty);
+        }
+
+        private void RefreshLastPanel()
+        {
+            bool has = item.LastText.Trim().Length > 0;
+            lastPanel.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+            if (!has) return;
+            string preview = item.LastText.Replace("\r\n", " / ").Replace("\n", " / ").Trim();
+            if (preview.Length > 70) preview = preview.Substring(0, 70) + "…";
+            string when = item.LastClearedAt.Length > 0 ? "（自动清空于 " + item.LastClearedAt + "）" : "（自动清空）";
+            lastLabel.Text = "上次作业" + when + "：" + preview;
+        }
+
         private void ApplyVisual()
         {
             Color fg = done ? Palette.TextMuted : Palette.TextPrimary;
@@ -266,8 +357,21 @@ namespace CampusClock
             else course.TextDecorations = null;
             box.Foreground = done ? Palette.Br(Palette.TextMuted) : Palette.Br(Palette.TextPrimary);
             box.Opacity = done ? 0.75 : 1.0;
+            methodBox.Foreground = done ? Palette.Br(Palette.TextMuted) : Palette.Br(Palette.TextPrimary);
+            methodBox.Opacity = done ? 0.75 : 1.0;
             Background = Palette.Br(done ? Palette.Hex("#13161B") : Palette.Surface);
         }
+
+        // ---- 自检用的最小钩子（走的都是真实处理器）----
+        public HomeworkItem Item { get { return item; } }
+        public string SimJobText { get { return box.Text; } }
+        public string SimMethodText { get { return methodBox.Text; } }
+        public bool SimLastPanelVisible { get { return lastPanel.Visibility == Visibility.Visible; } }
+        public string SimLastLabel { get { return lastLabel.Text; } }
+        public void SimSetJobText(string text) { box.Text = text; }
+        public void SimSetMethodText(string text) { methodBox.Text = text; }
+        public void SimClickUpdate() { DoUpdate(); }
+        public void SimClickRestore() { DoRestore(); }
     }
 
     public class HomeworkPage : Grid
@@ -278,6 +382,7 @@ namespace CampusClock
         private TextBlock footer;
         private List<HomeworkRow> rows = new List<HomeworkRow>();
         private TextBlock clearHint;
+        private TextBlock orphanHint;
 
         public HomeworkPage(AppCore core)
         {
@@ -306,6 +411,10 @@ namespace CampusClock
             chips = new WrapPanel();
             chips.Margin = new Thickness(0, 10, 0, 0);
             chipStack.Children.Add(chips);
+            orphanHint = Ui.Text("", 11.5, Palette.TextMuted, FontWeights.Normal, true);
+            orphanHint.Margin = new Thickness(0, 6, 0, 0);
+            orphanHint.Visibility = Visibility.Collapsed;
+            chipStack.Children.Add(orphanHint);
             Grid.SetRow(chipCard, 1);
             chipCard.Margin = new Thickness(0, 0, 0, 14);
             Children.Add(chipCard);
@@ -350,7 +459,19 @@ namespace CampusClock
                 };
                 chips.Children.Add(chip);
             }
-            clearHint.Text = "清空规则：" + core.ClearModeText() + "　·　勾选左侧圆圈表示作业已完成";
+            clearHint.Text = "清空规则：" + core.ClearModeText() +
+                "　·　勾选圆圈 = 已完成　·　「更新」= 清空正文开始新一轮（提交方式与可恢复的上次作业都保留）";
+            int orphan = 0;
+            for (int i = 0; i < core.Homework.Items.Count; i++)
+            {
+                HomeworkItem it = core.Homework.Items[i];
+                if (core.Config.TrackedCourses.Contains(it.Course)) continue;
+                if (it.Text.Trim().Length > 0 || it.Method.Trim().Length > 0 || it.LastText.Trim().Length > 0) orphan++;
+            }
+            orphanHint.Text = orphan > 0
+                ? "另有 " + orphan + " 门未跟踪的课程仍保留着作业内容与提交方式（取消跟踪不会删除数据，重新勾选即可看到）"
+                : "";
+            orphanHint.Visibility = orphan > 0 ? Visibility.Visible : Visibility.Collapsed;
             RebuildList();
         }
 
@@ -381,7 +502,7 @@ namespace CampusClock
             {
                 HomeworkItem item = core.Homework.Ensure(tracked[i]);
                 HomeworkRow row = new HomeworkRow(core, item);
-                row.UpdateMeta(core);
+                row.UpdateMeta();
                 row.Changed += delegate { UpdateFooter(); };
                 rows.Add(row);
                 list.Children.Add(row);
@@ -393,8 +514,8 @@ namespace CampusClock
         {
             for (int i = 0; i < rows.Count; i++)
             {
-                rows[i].SetExternalText();
-                rows[i].UpdateMeta(core);
+                rows[i].SyncFromModel();
+                rows[i].UpdateMeta();
             }
             UpdateFooter();
         }
@@ -410,6 +531,18 @@ namespace CampusClock
             }
             footer.Text = "已完成 " + done.ToString(CultureInfo.InvariantCulture) + " / " +
                 total.ToString(CultureInfo.InvariantCulture) + "　　数据保存在 data\\homework.json";
+        }
+
+        // ---- 自检钩子 ----
+        public int SimRowCount { get { return rows.Count; } }
+
+        public HomeworkRow SimRow(string course)
+        {
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (rows[i].Item.Course == course) return rows[i];
+            }
+            return null;
         }
     }
 }

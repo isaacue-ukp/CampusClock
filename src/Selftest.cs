@@ -145,11 +145,46 @@ namespace CampusClock
                 core.CheckAutoClear(later);
                 Check("下一次课后清空内容", item.Text == "" && !item.Done,
                     "Text='" + item.Text + "' Key=" + item.LastClearedKey);
+
+                // 4b. 切换"清空时机"绝不能误清空（2026-09-13 17:12 用户作业被吞的根因）
+                item.Text = "第五章 1-5 题";
+                item.Done = false;
+                item.LastClearedKey = "";
+                string savedMode = core.Config.ClearMode;
+                core.Config.ClearMode = "PerDay";
+                core.CheckAutoClear(fake);
+                Check("4b PerDay 首次仅建立基准", item.Text == "第五章 1-5 题", "Text=" + item.Text);
+                Say("    PerDay 基准键：" + item.LastClearedKey);
+                core.Config.ClearMode = "PerSession";
+                core.CheckAutoClear(fake);
+                Check("4b 切到 PerSession 不误清空", item.Text == "第五章 1-5 题",
+                    "Text=" + item.Text + " Key=" + item.LastClearedKey);
+                core.Config.ClearMode = "PerDay";
+                core.CheckAutoClear(fake);
+                Check("4b 切回 PerDay 不误清空", item.Text == "第五章 1-5 题",
+                    "Text=" + item.Text + " Key=" + item.LastClearedKey);
+                int before = item.Text.Length;
+                core.CheckAutoClear(later);
+                Check("4b 真正到了下一节课仍然清空", before > 0 && item.Text.Length == 0 && !item.Done,
+                    "Text='" + item.Text + "' Key=" + item.LastClearedKey);
+                core.Config.ClearMode = savedMode;
+                // 4c. 旧版遗留的"只有日期"的键，在 PerSession 下不得被当成新的一节课
+                item.Text = "第六章 1-3 题";
+                item.Done = false;
+                Session lastSession = schedule.LatestFinishedSession(course, fake, 21);
+                item.LastClearedKey = lastSession != null ? Fmt.Date(lastSession.Start) : Fmt.Date(fake);
+                core.Config.ClearMode = "PerSession";
+                core.CheckAutoClear(fake);
+                Check("4c 遗留日期键不误清空", item.Text == "第六章 1-3 题",
+                    "Text=" + item.Text + " Key=" + item.LastClearedKey);
+                core.Config.ClearMode = savedMode;
             }
             else
             {
                 Say("跳过作业清空测试（没有课程）");
             }
+
+            HomeworkV103Check(core, schedule);
 
             // ---- 5. build UI trees (no window shown) ----
             try
@@ -490,6 +525,221 @@ namespace CampusClock
             {
                 Check("悬浮球布局", false, ex.GetType().Name + ": " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Drives the floating widget through the interaction scenarios that used to break
+        /// (expand / close / hover again / click while expanded / drag / lost mouse-up).
+        /// </summary>
+        /// <summary>
+        /// v1.0.3 作业专项：提交方式、更新按钮、自动清空可恢复、取消跟踪不丢数据、旧数据兼容、损坏文件保护。
+        /// 全部走真实代码路径（Storage / AppCore / HomeworkPage / HomeworkRow）。
+        /// </summary>
+        private static void HomeworkV103Check(AppCore core, Schedule schedule)
+        {
+            Say("");
+            Say("—— v1.0.3 作业专项 ——");
+            if (core.Doc == null || core.Doc.Courses().Count == 0)
+            {
+                Say("跳过（没有课表）");
+                return;
+            }
+            if (core.Config.TrackedCourses.Count == 0) core.TrackCourse(core.Doc.Courses()[0], true);
+            string course = core.Config.TrackedCourses[0];
+            if (core.Config.TrackedCourses.Count < 2 && core.Doc.Courses().Count >= 2)
+            {
+                for (int i = 0; i < core.Doc.Courses().Count && core.Config.TrackedCourses.Count < 2; i++)
+                {
+                    if (core.Doc.Courses()[i] != course) core.TrackCourse(core.Doc.Courses()[i], true);
+                }
+            }
+            string other = core.Config.TrackedCourses.Count > 1 ? core.Config.TrackedCourses[1] : null;
+            int rulesBefore = core.Doc.Rules.Count;
+            DateTime now = DateTime.Today.AddHours(23);
+
+            HomeworkItem item = core.Homework.Ensure(course);
+            HomeworkPage page = new HomeworkPage(core);
+            HomeworkRow row = page.SimRow(course);
+            Check("找到该课程的作业行", row != null, "rows=" + page.SimRowCount);
+            if (row == null) return;
+
+            // ---- T1 基本持久化 ----
+            item.Text = "A";
+            item.Method = "教学网";
+            item.Done = false;
+            core.SaveHomeworkNow();
+            HomeworkItem r1 = Storage.LoadHomework().Find(course);
+            Check("T1 正文与提交方式都能持久化", r1 != null && r1.Text == "A" && r1.Method == "教学网",
+                r1 == null ? "没有该课程" : "Text=" + r1.Text + " Method=" + r1.Method);
+
+            // ---- T2 修改正文不改提交方式（走 UI 真实处理器）----
+            row.SimSetJobText("C");
+            Check("T2 修改正文后提交方式仍为 B", item.Text == "C" && item.Method == "教学网",
+                "Text=" + item.Text + " Method=" + item.Method);
+
+            // ---- T3 「更新」按钮 ----
+            item.Text = "A"; item.Method = "教学网"; item.Done = false;
+            row.SimClickUpdate();
+            Check("T3a 未完成→更新：正文清空 / 提交方式保留 / 仍未完成",
+                item.Text == "" && item.Method == "教学网" && !item.Done,
+                "Text='" + item.Text + "' Method=" + item.Method + " Done=" + item.Done);
+            item.Text = "A"; item.Done = true;
+            row.SimClickUpdate();
+            Check("T3b 已完成→更新：正文清空 / 提交方式保留 / 状态变未完成",
+                item.Text == "" && item.Method == "教学网" && !item.Done,
+                "Text='" + item.Text + "' Method=" + item.Method + " Done=" + item.Done);
+
+            // ---- T4 自动课后清空：正文清空但留下可恢复内容，提交方式不变 ----
+            item.Text = "A"; item.Method = "Class网"; item.Done = false;
+            item.LastClearedKey = ""; item.LastText = ""; item.LastClearedAt = "";
+            core.Config.ClearMode = "PerSession";
+            core.CheckAutoClear(now);
+            Check("T4a 首次仅建立基准，不清空", item.Text == "A" && item.LastText == "",
+                "Text=" + item.Text + " Last=" + item.LastText);
+            DateTime later = NextCourseMoment(schedule, now, course);
+            core.CheckAutoClear(later);
+            Check("T4b 自动清空：正文清空 / LastText=A / 提交方式不变 / 记录时间",
+                item.Text == "" && item.LastText == "A" && item.LastClearedAt.Length > 0 && item.Method == "Class网",
+                "Text='" + item.Text + "' Last='" + item.LastText + "' Method=" + item.Method);
+            row.SyncFromModel();
+            Check("T4c 界面显示「上次作业」提示", row.SimLastPanelVisible && row.SimLastLabel.Contains("上次作业"),
+                row.SimLastLabel);
+
+            // ---- T5 恢复 ----
+            row.SimClickRestore();
+            Check("T5a 恢复：正文回到 A / 提交方式不变 / 提示消失",
+                item.Text == "A" && item.Method == "Class网" && item.LastText.Length == 0 && !row.SimLastPanelVisible,
+                "Text='" + item.Text + "' Method=" + item.Method);
+            core.CheckAutoClear(later);
+            Check("T5b 恢复后不会立即再次被自动清空", item.Text == "A", "Text=" + item.Text);
+
+            // ---- T6 切换清空模式 ----
+            item.Text = "B2"; item.Method = "邮件";
+            string[] modes = new string[] { "PerDay", "PerSession", "PerDay", "Manual", "PerSession" };
+            for (int i = 0; i < modes.Length; i++)
+            {
+                core.Config.ClearMode = modes[i];
+                core.CheckAutoClear(now);
+            }
+            Check("T6 切换清空模式：不清空正文、不改提交方式",
+                item.Text == "B2" && item.Method == "邮件", "Text=" + item.Text + " Method=" + item.Method);
+
+            // ---- T7 取消跟踪不删除作业 ----
+            core.TrackCourse(course, false);
+            Check("T7a 取消跟踪后内存数据仍在", core.Homework.Find(course) != null &&
+                core.Homework.Find(course).Text == "B2", "Text=" + (core.Homework.Find(course) == null ? "-" : core.Homework.Find(course).Text));
+            core.SyncTrackedCourses();
+            HomeworkItem afterSync = core.Homework.Find(course);
+            Check("T7b 课程同步后数据仍在（不会被 RetainOnly 删掉）",
+                afterSync != null && afterSync.Text == "B2" && afterSync.Method == "邮件");
+            core.SaveHomeworkNow();
+            HomeworkItem r7 = Storage.LoadHomework().Find(course);
+            Check("T7c 重启（重新读取文件）后数据仍在",
+                r7 != null && r7.Text == "B2" && r7.Method == "邮件",
+                r7 == null ? "没有该课程" : "Text=" + r7.Text + " Method=" + r7.Method);
+            core.TrackCourse(course, true);
+            HomeworkItem back2 = core.Homework.Find(course);
+            Check("T7d 重新跟踪后原数据仍在",
+                back2 != null && back2.Text == "B2" && back2.Method == "邮件");
+
+            // ---- T8 旧数据兼容（没有 Method / LastText 字段）----
+            string good = File.ReadAllText(Paths.HomeworkFile, Encoding.UTF8);
+            File.WriteAllText(Paths.HomeworkFile,
+                "{ \"Items\": [ { \"Course\": \"旧数据课程\", \"Text\": \"旧作业\", \"Done\": false, " +
+                "\"LastClearedKey\": \"2026-09-08\", \"Updated\": \"2026-09-08 10:00\" } ], \"Log\": [] }",
+                Encoding.UTF8);
+            HomeworkState legacy = Storage.LoadHomework();
+            Check("T8a 旧数据读取不报错且内容完整",
+                legacy.Items.Count == 1 && legacy.Items[0].Text == "旧作业" &&
+                legacy.Items[0].Method == "" && legacy.Items[0].LastText == "",
+                legacy.Items.Count == 0 ? "没有条目" : "Text=" + legacy.Items[0].Text + " Method='" + legacy.Items[0].Method + "'");
+            Storage.SaveHomework(legacy);
+            string upgraded = File.ReadAllText(Paths.HomeworkFile, Encoding.UTF8);
+            Check("T8b 保存后升级为新格式（含 Method / LastText 字段）",
+                upgraded.Contains("\"Method\"") && upgraded.Contains("\"LastText\"") && upgraded.Contains("旧作业"));
+
+            // ---- T9 损坏文件保护（本次新增的数据安全网）----
+            File.WriteAllText(Paths.HomeworkFile,
+                "{ \"Items\": [ { \"Course\": \"坏数据\", \"Text\": \"重要内容\" ", Encoding.UTF8);
+            HomeworkState broken = Storage.LoadHomework();
+            string bad = broken.LoadBackupPath;
+            bool backupOk = bad.Length > 0 && bad != Paths.HomeworkFile && File.Exists(bad) &&
+                File.ReadAllText(bad, Encoding.UTF8).Contains("重要内容");
+            Check("T9a 解析失败不抛异常并标记 LoadFailed", broken.LoadFailed);
+            Check("T9b 已保留损坏文件备份（内容完整）", backupOk, bad);
+            File.WriteAllText(Paths.HomeworkFile, good, Encoding.UTF8);
+            try { if (backupOk) File.Delete(bad); } catch { }
+
+            // ---- T10 原子写入 ----
+            Storage.SaveHomework(core.Homework);
+            int tmpLeft = Directory.GetFiles(Paths.DataDir, "*.tmp-*").Length;
+            Check("T10 原子写入不留下临时文件", tmpLeft == 0, "left=" + tmpLeft);
+
+            // ---- T11 「更新」与自动清空连续发生 ----
+            item = core.Homework.Ensure(course);
+            item.Text = "A2"; item.Method = "微信"; item.Done = true;
+            item.LastText = ""; item.LastClearedAt = ""; item.LastClearedKey = "";
+            core.Config.ClearMode = "PerSession";
+            core.CheckAutoClear(now);
+            Check("T11a 建立基准时正文保留", item.Text == "A2", "Text=" + item.Text);
+            row.SimClickUpdate();
+            Check("T11b 更新后：正文空 / 未完成 / 提交方式=微信",
+                item.Text == "" && !item.Done && item.Method == "微信",
+                "Text='" + item.Text + "' Done=" + item.Done + " Method=" + item.Method);
+            core.CheckAutoClear(now);
+            Check("T11c 同一节课不会因为更新而触发自动清空",
+                item.Text == "" && item.LastText == "" && item.Method == "微信");
+            DateTime later2 = NextCourseMoment(schedule, now, course);
+            core.CheckAutoClear(later2);
+            Check("T11d 下一节课且正文为空：不产生 LastText、提交方式不变",
+                item.LastText == "" && item.Method == "微信", "Last='" + item.LastText + "' Method=" + item.Method);
+            item.Text = "B3";
+            core.CheckAutoClear(NextCourseMoment(schedule, later2, course));
+            Check("T11e 之后写的作业被正确保存为可恢复内容",
+                item.Text == "" && item.LastText == "B3" && item.Method == "微信",
+                "Text='" + item.Text + "' Last='" + item.LastText + "'");
+
+            // ---- T12 更新只影响当前课程 ----
+            string modeBeforeUpdate = core.Config.ClearMode;
+            string otherText = null;
+            string otherMethod = null;
+            if (other != null)
+            {
+                HomeworkItem oi = core.Homework.Ensure(other);
+                oi.Text = "别的作业"; oi.Method = "课堂提交";
+                otherText = oi.Text; otherMethod = oi.Method;
+            }
+            item.Text = "C2"; item.Method = "教师指定平台"; item.Done = false;
+            row.SimClickUpdate();
+            bool otherOk = other == null || (core.Homework.Find(other).Text == otherText &&
+                core.Homework.Find(other).Method == otherMethod);
+            Check("T12a 更新不影响其他课程的作业与提交方式", otherOk,
+                other == null ? "（只有一门课）" : "other=" + core.Homework.Find(other).Text + "/" + core.Homework.Find(other).Method);
+            Check("T12b 更新不改变清空模式", core.Config.ClearMode == modeBeforeUpdate, core.Config.ClearMode);
+            Check("T12c 更新不改变课程/课表信息",
+                core.Doc.Rules.Count == rulesBefore && core.Config.TrackedCourses.Contains(course),
+                "rules=" + core.Doc.Rules.Count);
+            Check("T12d 更新后提交方式仍保留", item.Method == "教师指定平台", item.Method);
+            core.SaveHomeworkNow();
+            HomeworkItem r12 = Storage.LoadHomework().Find(course);
+            Check("T13 更新后重启（重新读取）提交方式仍存在",
+                r12 != null && r12.Method == "教师指定平台", r12 == null ? "没有该课程" : r12.Method);
+
+            core.SaveConfig();
+        }
+
+        /// <summary>该课程在 after 之后的第一次课「结束时间 + 5 分钟」。</summary>
+        private static DateTime NextCourseMoment(Schedule schedule, DateTime after, string course)
+        {
+            DateTime probe = after;
+            for (int i = 0; i < 80; i++)
+            {
+                Session s = schedule.NextSession(probe, 21);
+                if (s == null) return after.AddDays(7);
+                if (s.Course == course) return s.End.AddMinutes(5);
+                probe = s.Start.AddMinutes(1);
+            }
+            return after.AddDays(7);
         }
 
         /// <summary>

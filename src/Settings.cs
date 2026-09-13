@@ -356,7 +356,7 @@ namespace CampusClock
                 data.Children.Add(warn);
             }
 
-            TextBlock about = Ui.Text("CampusClock 1.0.2 · 本地运行，无需登录 · 数据仅保存在应用目录中",
+            TextBlock about = Ui.Text("CampusClock 1.0.3 · 本地运行，无需登录 · 数据仅保存在应用目录中",
                 11.5, Palette.TextMuted);
             about.Margin = new Thickness(0, 20, 0, 10);
             content.Children.Add(about);

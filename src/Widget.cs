@@ -790,14 +790,24 @@ namespace CampusClock
             };
             g.Children.Add(circle);
 
+            StackPanel nameCol = new StackPanel();
+            nameCol.Margin = new Thickness(0, 2, 8, 0);
             TextBlock name = Ui.Text(item.Course, 12, item.Done ? Palette.TextMuted : Palette.TextPrimary,
                 FontWeights.SemiBold, true);
-            name.VerticalAlignment = VerticalAlignment.Top;
-            name.Margin = new Thickness(0, 2, 8, 0);
             if (item.Done) name.TextDecorations = TextDecorations.Strikethrough;
-            Grid.SetColumn(name, 1);
-            g.Children.Add(name);
+            nameCol.Children.Add(name);
+            if (item.Method.Trim().Length > 0)
+            {
+                // 提交方式：独立 metadata，只在这里只读展示
+                TextBlock method = Ui.Text("提交：" + item.Method.Trim(), 10.5, Palette.TextMuted,
+                    FontWeights.Normal, true);
+                method.Margin = new Thickness(0, 2, 0, 0);
+                nameCol.Children.Add(method);
+            }
+            Grid.SetColumn(nameCol, 1);
+            g.Children.Add(nameCol);
 
+            StackPanel jobCol = new StackPanel();
             TextBox box = new TextBox();
             box.AcceptsReturn = true;
             box.TextWrapping = TextWrapping.Wrap;
@@ -814,8 +824,28 @@ namespace CampusClock
                 core.SaveHomeworkSoon();
             };
             box.GotKeyboardFocus += delegate { collapseTimer.Stop(); };
-            Grid.SetColumn(box, 2);
-            g.Children.Add(box);
+            jobCol.Children.Add(box);
+            if (item.LastText.Trim().Length > 0)
+            {
+                StackPanel lastRow = new StackPanel();
+                lastRow.Orientation = Orientation.Horizontal;
+                lastRow.Margin = new Thickness(0, 4, 0, 0);
+                TextBlock hint = Ui.Text("上次作业可恢复", 10, Palette.TextMuted);
+                hint.VerticalAlignment = VerticalAlignment.Center;
+                lastRow.Children.Add(hint);
+                TextBtn restore = new TextBtn("恢复", Colors.Transparent, Palette.Hover,
+                    Palette.Accent, Palette.Alpha(Palette.Accent, 0.45));
+                restore.Margin = new Thickness(8, 0, 0, 0);
+                restore.VerticalAlignment = VerticalAlignment.Center;
+                restore.Clicked += delegate
+                {
+                    if (core.RestoreLastText(item.Course)) RefreshContent();
+                };
+                lastRow.Children.Add(restore);
+                jobCol.Children.Add(lastRow);
+            }
+            Grid.SetColumn(jobCol, 2);
+            g.Children.Add(jobCol);
             card.Child = g;
             return card;
         }

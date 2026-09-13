@@ -34,6 +34,7 @@ namespace CampusClock
         private Widget widget;
         private bool reallyClose;
         private bool trayHintShown;
+        private bool loadWarningShown;
         private const string TextInfoSeparator = "　·　";
 
         public MainWindow(AppCore core)
@@ -63,6 +64,11 @@ namespace CampusClock
             BuildShell();
             CreateTray();
             CreateWidget();
+            // keep the homework board in sync when data changes elsewhere (e.g. from the floating panel)
+            Core.HomeworkChanged += delegate
+            {
+                if (homeworkPage != null) homeworkPage.SyncFromModel();
+            };
 
             tick = new System.Windows.Threading.DispatcherTimer();
             tick.Interval = TimeSpan.FromSeconds(20);
@@ -72,6 +78,14 @@ namespace CampusClock
             Loaded += delegate
             {
                 OnTick();
+                if (Core.Homework.LoadFailed && !loadWarningShown)
+                {
+                    loadWarningShown = true;
+                    string where = Core.Homework.LoadBackupPath.Length > 0
+                        ? "（原文件已保留：" + Core.Homework.LoadBackupPath + "）"
+                        : "";
+                    ShowToast("作业数据读取失败，为避免覆盖，CC 没有丢弃原文件" + where, Palette.Warn);
+                }
             };
             Closing += OnClosing;
             StateChanged += delegate

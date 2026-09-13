@@ -187,8 +187,11 @@ namespace CampusClock
     {
         public string Course = "";
         public string Text = "";
+        public string Method = "";              // 提交方式：自由文本，独立于作业内容生命周期
         public bool Done = false;
         public string LastClearedKey = "";      // e.g. "2026-10-09 15:10"
+        public string LastText = "";            // 上一次被【自动课后清空】保留下来、可恢复的内容
+        public string LastClearedAt = "";       // 那次自动清空发生的时间（用于界面提示）
         public string Updated = "";
     }
 
@@ -197,6 +200,8 @@ namespace CampusClock
     {
         public List<HomeworkItem> Items = new List<HomeworkItem>();
         public List<string> Log = new List<string>();
+        public bool LoadFailed;                 // 文件存在但读取/解析失败（此时不可静默覆盖）
+        public string LoadBackupPath = "";      // 失败时保留的备份文件路径（如果有）
 
         public HomeworkItem Find(string course)
         {
@@ -219,14 +224,8 @@ namespace CampusClock
             return it;
         }
 
-        /// <summary>Drop items whose course is no longer tracked.</summary>
-        public void RetainOnly(List<string> courses)
-        {
-            for (int i = Items.Count - 1; i >= 0; i--)
-            {
-                if (!courses.Contains(Items[i].Course)) Items.RemoveAt(i);
-            }
-        }
+        // NOTE: there is deliberately no "drop items that are not tracked" helper any more.
+        // Whether a course is tracked is a UI/config concern; homework data must survive untracking.
     }
 
     public static class Paths
@@ -609,7 +608,7 @@ namespace CampusClock
                 d["TrackedCourses"] = cfg.TrackedCourses;
                 d["TrayEnabled"] = cfg.TrayEnabled;
                 d["StartMinimized"] = cfg.StartMinimized;
-                File.WriteAllText(Paths.ConfigFile, Json.Pretty(d), Encoding.UTF8);
+                WriteAtomic(Paths.ConfigFile, Json.Pretty(d));
             }
             catch (Exception ex)
             {
@@ -620,38 +619,92 @@ namespace CampusClock
         public static HomeworkState LoadHomework()
         {
             HomeworkState st = new HomeworkState();
+            if (!File.Exists(Paths.HomeworkFile)) return st;   // fresh install: nothing to protect
+            string raw;
             try
             {
-                if (File.Exists(Paths.HomeworkFile))
-                {
-                    Dictionary<string, object> d = Json.AsDict(Json.Parse(File.ReadAllText(Paths.HomeworkFile, Encoding.UTF8)));
-                    if (d != null && d.ContainsKey("Items"))
-                    {
-                        IEnumerable list = d["Items"] as IEnumerable;
-                        if (list != null)
-                        {
-                            foreach (object o in list)
-                            {
-                                Dictionary<string, object> row = Json.AsDict(o);
-                                if (row == null) continue;
-                                HomeworkItem it = new HomeworkItem();
-                                it.Course = Json.GetString(row, "Course", "");
-                                it.Text = Json.GetString(row, "Text", "");
-                                it.Done = Json.GetBool(row, "Done", false);
-                                it.LastClearedKey = Json.GetString(row, "LastClearedKey", "");
-                                it.Updated = Json.GetString(row, "Updated", "");
-                                if (it.Course.Length > 0) st.Items.Add(it);
-                            }
-                        }
-                    }
-                    st.Log = Json.GetStrings(d, "Log");
-                }
+                raw = File.ReadAllText(Paths.HomeworkFile, Encoding.UTF8);
             }
             catch (Exception ex)
             {
-                Log.Warn("读取 homework.json 失败：" + ex.Message);
+                // the file is there but unreadable (locked / permission): keep it untouched
+                st.LoadFailed = true;
+                st.LoadBackupPath = Paths.HomeworkFile;
+                Log.Error("读取 homework.json 失败，已保持原文件不变，本次不覆盖：" + ex.Message);
+                return st;
+            }
+            try
+            {
+                Dictionary<string, object> d = Json.AsDict(Json.Parse(raw));
+                if (d != null && d.ContainsKey("Items"))
+                {
+                    IEnumerable list = d["Items"] as IEnumerable;
+                    if (list != null)
+                    {
+                        foreach (object o in list)
+                        {
+                            Dictionary<string, object> row = Json.AsDict(o);
+                            if (row == null) continue;
+                            HomeworkItem it = new HomeworkItem();
+                            it.Course = Json.GetString(row, "Course", "");
+                            it.Text = Json.GetString(row, "Text", "");
+                            it.Method = Json.GetString(row, "Method", "");          // 旧数据没有该字段 -> 空字符串
+                            it.Done = Json.GetBool(row, "Done", false);
+                            it.LastClearedKey = Json.GetString(row, "LastClearedKey", "");
+                            it.LastText = Json.GetString(row, "LastText", "");      // 旧数据没有该字段 -> 空字符串
+                            it.LastClearedAt = Json.GetString(row, "LastClearedAt", "");
+                            it.Updated = Json.GetString(row, "Updated", "");
+                            if (it.Course.Length > 0) st.Items.Add(it);
+                        }
+                    }
+                }
+                st.Log = Json.GetStrings(d, "Log");
+            }
+            catch (Exception ex)
+            {
+                // the file exists but does not parse: keep a copy before the app can ever overwrite it
+                st.LoadFailed = true;
+                st.LoadBackupPath = BackupBrokenFile();
+                Log.Error("homework.json 解析失败（已备份到 " + st.LoadBackupPath + "）：" + ex.Message);
             }
             return st;
+        }
+
+        /// <summary>Copies a damaged file next to the original (never moves or deletes it).</summary>
+        private static string BackupBrokenFile()
+        {
+            try
+            {
+                string dest = Paths.HomeworkFile + ".bad-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                File.Copy(Paths.HomeworkFile, dest, true);
+                return dest;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("备份损坏的 homework.json 失败：" + ex.Message);
+                return Paths.HomeworkFile;
+            }
+        }
+
+        /// <summary>
+        /// Writes a file in one step: the caller's data is written to a temporary file first, so a crash
+        /// or a kill in the middle can never truncate the existing (good) file.
+        /// </summary>
+        public static void WriteAtomic(string path, string text)
+        {
+            string tmp = path + ".tmp-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            File.WriteAllText(tmp, text, Encoding.UTF8);
+            try
+            {
+                if (File.Exists(path)) File.Replace(tmp, path, null);
+                else File.Move(tmp, path);
+            }
+            catch
+            {
+                // File.Replace can be refused (temporarily locked target): fall back to a plain copy
+                File.Copy(tmp, path, true);
+                try { File.Delete(tmp); } catch { }
+            }
         }
 
         public static void SaveHomework(HomeworkState st)
@@ -666,14 +719,17 @@ namespace CampusClock
                     Dictionary<string, object> row = new Dictionary<string, object>();
                     row["Course"] = it.Course;
                     row["Text"] = it.Text;
+                    row["Method"] = it.Method;
                     row["Done"] = it.Done;
                     row["LastClearedKey"] = it.LastClearedKey;
+                    row["LastText"] = it.LastText;
+                    row["LastClearedAt"] = it.LastClearedAt;
                     row["Updated"] = it.Updated;
                     rows.Add(row);
                 }
                 d["Items"] = rows;
                 d["Log"] = st.Log;
-                File.WriteAllText(Paths.HomeworkFile, Json.Pretty(d), Encoding.UTF8);
+                WriteAtomic(Paths.HomeworkFile, Json.Pretty(d));
             }
             catch (Exception ex)
             {
