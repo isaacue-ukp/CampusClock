@@ -63,11 +63,12 @@ namespace CampusClock
             SourceInitialized += OnSourceInitialized;
             BuildShell();
             CreateTray();
-            CreateWidget();
+            if (Core.Config.BallEnabled) CreateWidget();
             // keep the homework board in sync when data changes elsewhere (e.g. from the floating panel)
             Core.HomeworkChanged += delegate
             {
                 if (homeworkPage != null) homeworkPage.SyncFromModel();
+                if (widget != null) widget.OnHomeworkChangedExternally();
             };
 
             tick = new System.Windows.Threading.DispatcherTimer();
@@ -497,7 +498,15 @@ namespace CampusClock
             if (Core.ImportIcs(dlg.FileName, out error))
             {
                 int count = Core.Doc != null ? Core.Doc.Courses().Count : 0;
-                ShowToast("课表导入成功，共 " + count + " 门课程", Palette.Good);
+                if (count == 0)
+                {
+                    // The file was copied, but nothing could be parsed: do not report a cheerful success.
+                    ShowToast("文件已复制，但未解析出任何课程，请确认是标准 .ics 课表", Palette.Warn);
+                }
+                else
+                {
+                    ShowToast("课表导入成功，共 " + count + " 门课程", Palette.Good);
+                }
                 RefreshAll();
             }
             else
@@ -580,7 +589,6 @@ namespace CampusClock
             {
             }
             if (tray != null) tray.Dispose();
-            if (widget != null) widget.AllowClose();
             Application.Current.Shutdown();
         }
 

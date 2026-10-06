@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace CampusClock
 {
@@ -23,6 +24,8 @@ namespace CampusClock
         private TextBlock valueExpand;
         private TextBlock valueAnim;
         private List<Chip> clearChips = new List<Chip>();
+        private DispatcherTimer applyTimer;
+        private bool applyPending;
 
         public event EventHandler ImportRequested;
 
@@ -38,6 +41,16 @@ namespace CampusClock
             content = new StackPanel();
             sv.Content = content;
             Children.Add(sv);
+
+            // Writing config.json and rebuilding the preview on every slider step is wasteful; coalesce
+            // the burst of changes that a single drag produces.
+            applyTimer = new DispatcherTimer();
+            applyTimer.Interval = TimeSpan.FromMilliseconds(180);
+            applyTimer.Tick += delegate { applyTimer.Stop(); ApplyNow(); };
+            Unloaded += delegate
+            {
+                if (applyPending) { applyTimer.Stop(); ApplyNow(); }   // never lose the last change
+            };
             Build();
         }
 
@@ -356,7 +369,7 @@ namespace CampusClock
                 data.Children.Add(warn);
             }
 
-            TextBlock about = Ui.Text("CampusClock 1.0.3 · 本地运行，无需登录 · 数据仅保存在应用目录中",
+            TextBlock about = Ui.Text("CampusClock 1.0.4 · 本地运行，无需登录 · 数据仅保存在应用目录中",
                 11.5, Palette.TextMuted);
             about.Margin = new Thickness(0, 20, 0, 10);
             content.Children.Add(about);
@@ -378,6 +391,19 @@ namespace CampusClock
 
         private void Apply()
         {
+            applyPending = true;
+            if (applyTimer == null)
+            {
+                ApplyNow();
+                return;
+            }
+            applyTimer.Stop();
+            applyTimer.Start();
+        }
+
+        private void ApplyNow()
+        {
+            applyPending = false;
             core.Config.Normalize();
             core.SaveConfig();
             RefreshPreview();

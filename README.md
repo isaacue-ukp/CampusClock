@@ -67,7 +67,7 @@
 
 ## 数据与备份
 
-所有数据都在程序目录的 `data\` 文件夹：
+所有数据都在程序目录的 `data\` 文件夹（如果该目录不可写，程序会自动改用 `%LOCALAPPDATA%\CampusClock`）：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -102,7 +102,7 @@
 点「导入课表」选新的 `.ics` 即可，旧文件会被覆盖；已选课程若不在新课表里会自动从跟踪列表移除。
 
 **支持什么格式的课表？**
-标准 iCalendar（`.ics`）。逐周重复（`RRULE:FREQ=WEEKLY`）、`UNTIL`、`INTERVAL`、`BYDAY`、`EXDATE`、时区（`TZID`，含 UTC）都支持；`第X-Y节` 的节次信息会从 `DESCRIPTION` 里读取，读不到时用时间显示。
+标准 iCalendar（`.ics`）。逐周重复（`RRULE:FREQ=WEEKLY`）、`UNTIL`、`INTERVAL`、`BYDAY`、`EXDATE`、时区（`TZID`，含 UTC）都支持；`第X-Y节` 的节次信息会从 `DESCRIPTION` 里读取，读不到时用时间显示。`FREQ=DAILY` 目前按「每周一次」近似显示；`FREQ=MONTHLY` / `YEARLY` 只显示首次并给出提示。
 
 ## 源码与重新编译
 
@@ -118,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 .\CampusClock.exe --selftest --ics .\data\timetable.ics
 ```
 
-结果会打印出来并写入 `data\selftest.log`。
+结果会打印出来并写入 `%TEMP%\CampusClock-selftest\selftest.log`（自检使用独立临时目录，不会改动 `data\` 里的真实数据）。退出码 0 表示全部通过，非 0 表示有失败项。
 
 ## 系统要求
 

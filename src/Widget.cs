@@ -24,7 +24,6 @@ namespace CampusClock
         private Grid expandedLayer;
         private ContentControl bodyHost;
         private TextBlock headerTitle;
-        private TextBlock headerSub;
         private IconBtn pinBtn;
         private Border tabTime;
         private Border tabHw;
@@ -48,7 +47,6 @@ namespace CampusClock
         private double anchorH;
         private bool expandRight;
         private bool expandDown;
-        private bool allowClose;
 
         private bool dragging;
         private Point dragOrigin;        // pointer offset inside the window when the drag started
@@ -60,7 +58,7 @@ namespace CampusClock
         private bool simButtonDown;
 
         private string pane = "timetable";
-        private bool contentDirty = true;
+        private bool selfChange;            // set while this widget itself raises HomeworkChanged
 
         public Widget(AppCore core, MainWindow main)
         {
@@ -291,7 +289,6 @@ namespace CampusClock
             footer.Margin = new Thickness(12, 0, 12, 0);
             Grid.SetRow(footer, 2);
             expandedLayer.Children.Add(footer);
-            headerSub = headerTitle;
 
             shell.ContextMenu = BuildContextMenu();
             return expandedLayer;
@@ -317,7 +314,6 @@ namespace CampusClock
                 pane = left ? "timetable" : "homework";
                 core.Config.BallPane = pane;
                 core.SaveConfig();
-                contentDirty = true;
                 RefreshContent();
                 UpdateTabs();
             };
@@ -399,7 +395,6 @@ namespace CampusClock
             }
             else
             {
-                contentDirty = true;
                 RefreshContent();
             }
         }
@@ -468,7 +463,6 @@ namespace CampusClock
             collapsed.Visibility = Visibility.Collapsed;
             expandedLayer.Visibility = Visibility.Visible;
             shell.CornerRadius = new CornerRadius(18);
-            contentDirty = true;
             bodyHost.Content = null;
             UpdateTabs();
 
@@ -721,7 +715,6 @@ namespace CampusClock
             {
                 bodyHost.Content = BuildHomeworkBody(bodyW, bodyH);
             }
-            contentDirty = false;
         }
 
         private FrameworkElement BuildHomeworkBody(double w, double h)
@@ -786,7 +779,7 @@ namespace CampusClock
                 item.Updated = Fmt.DateTimeText(DateTime.Now);
                 core.SaveHomeworkNow();
                 RefreshContent();
-                if (main != null) main.RefreshAll();
+                RaiseHomeworkChangedSelf();   // keep the main window board in sync
             };
             g.Children.Add(circle);
 
@@ -822,6 +815,7 @@ namespace CampusClock
                 item.Text = box.Text;
                 item.Updated = Fmt.DateTimeText(DateTime.Now);
                 core.SaveHomeworkSoon();
+                RaiseHomeworkChangedSelf();   // keep the main window board in sync
             };
             box.GotKeyboardFocus += delegate { collapseTimer.Stop(); };
             jobCol.Children.Add(box);
@@ -839,7 +833,13 @@ namespace CampusClock
                 restore.VerticalAlignment = VerticalAlignment.Center;
                 restore.Clicked += delegate
                 {
-                    if (core.RestoreLastText(item.Course)) RefreshContent();
+                    // RestoreLastText itself raises HomeworkChanged; suppress our own refresh so the
+                    // panel is rebuilt exactly once, with the restored text.
+                    selfChange = true;
+                    bool restored;
+                    try { restored = core.RestoreLastText(item.Course); }
+                    finally { selfChange = false; }
+                    if (restored) RefreshContent();
                 };
                 lastRow.Children.Add(restore);
                 jobCol.Children.Add(lastRow);
@@ -973,9 +973,25 @@ namespace CampusClock
             }
         }
 
-        public void AllowClose()
+        /// <summary>
+        /// Refresh the panel after a homework change made somewhere else (main window, auto-clear).
+        /// Changes raised by this widget itself are ignored here (they are handled inline), and a text
+        /// box the user is currently typing in is never rebuilt under their fingers.
+        /// </summary>
+        public void OnHomeworkChangedExternally()
         {
-            allowClose = true;
+            if (selfChange) return;
+            if (!expanded || pane != "homework") return;
+            if (IsKeyboardFocusWithin && Keyboard.FocusedElement is TextBox) return;
+            RefreshContent();
+        }
+
+        /// <summary>Raises the shared homework event while telling our own handler to stand down.</summary>
+        private void RaiseHomeworkChangedSelf()
+        {
+            selfChange = true;
+            try { core.RaiseHomeworkChanged(); }
+            finally { selfChange = false; }
         }
 
         // ------------------------------------------------------------------

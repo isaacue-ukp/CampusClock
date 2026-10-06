@@ -44,6 +44,13 @@ namespace CampusClock
             ThemeResources.Apply();
             Say("主题样式加载完成");
 
+            // 强调色改动必须实时反映到主题资源（换色后 TextBox 光标 / 选区 / 焦点边框跟随变化）
+            Palette.SetAccent("#4CC38A");
+            SolidColorBrush accentBrush = Application.Current.Resources["CC.Accent"] as SolidColorBrush;
+            Check("强调色资源实时刷新", accentBrush != null && accentBrush.Color == Palette.Hex("#4CC38A"),
+                accentBrush == null ? "资源缺失" : accentBrush.Color.ToString());
+            Palette.SetAccent("#6D8DFF");
+
             // ---- 1. parse ----
             IcsDocument doc = null;
             if (icsPath != null && File.Exists(icsPath))
@@ -137,11 +144,13 @@ namespace CampusClock
                 item.Done = false;
                 item.LastClearedKey = "";
                 DateTime fake = DateTime.Today.AddHours(23);
+                core.Config.ClearMode = "PerSession";   // independent of whatever a previous run left behind
                 core.CheckAutoClear(fake);
                 Check("首次运行仅建立基准，不清空", item.Text == "第三章习题", "Text=" + item.Text);
                 string baseline = item.LastClearedKey;
                 Say("基准键：" + baseline);
-                DateTime later = WeekStartPlus(schedule, fake, course);
+                // The clear must trigger on the *next* class, so look forward in time (not backwards):
+                DateTime later = NextCourseMoment(schedule, fake, course);
                 core.CheckAutoClear(later);
                 Check("下一次课后清空内容", item.Text == "" && !item.Done,
                     "Text='" + item.Text + "' Key=" + item.LastClearedKey);
@@ -234,7 +243,6 @@ namespace CampusClock
                 Shot("05-widget-homework.png", w.Content as FrameworkElement, 600, 600);
                 core.Config.AnimationMs = savedAnim;
                 Say("悬浮球（课表 / 作业两种展开）构建完成");
-                w.AllowClose();
                 w.Close();
                 Check("悬浮球构建", true, "");
             }
@@ -379,27 +387,6 @@ namespace CampusClock
             sb.AppendLine("RRULE:FREQ=WEEKLY;UNTIL=20270104T160000Z;INTERVAL=1");
             sb.AppendLine("END:VEVENT");
             return sb.ToString();
-        }
-
-        private static DateTime WeekStartPlus(Schedule schedule, DateTime baseTime, string course)
-        {
-            // find a moment after the next occurrence of the course so the clear triggers
-            Session next = null;
-            for (int i = 1; i <= 28; i++)
-            {
-                List<Session> list = schedule.WeekSessions(Schedule.WeekStart(baseTime).AddDays(-7 * i));
-                for (int j = 0; j < list.Count; j++)
-                {
-                    if (list[j].Course == course && list[j].End < baseTime)
-                    {
-                        next = list[j];
-                        break;
-                    }
-                }
-                if (next != null) break;
-            }
-            if (next == null) return baseTime.AddDays(7);
-            return next.End.AddMinutes(5);
         }
 
         public static void ForceLayout(FrameworkElement el, double w, double h)
@@ -971,7 +958,6 @@ namespace CampusClock
                 w.SimRunAnimationToEnd();
                 Check("⑯ 随后悬停可正常展开", w.SimExpanded, "expanded=" + w.SimExpanded);
 
-                w.AllowClose();
                 w.Close();
             }
             catch (Exception ex)

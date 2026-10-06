@@ -159,6 +159,7 @@ namespace CampusClock
             List<string> cleared = new List<string>();
             if (Config.ClearMode == "Manual") return cleared;
             if (Schedule == null) return cleared;
+            bool baselineDirty = false;   // write the baseline keys back in one pass, not once per course
             for (int i = 0; i < Config.TrackedCourses.Count; i++)
             {
                 string course = Config.TrackedCourses[i];
@@ -174,7 +175,7 @@ namespace CampusClock
                 {
                     // first observation: remember it as the baseline, do not clear now
                     item.LastClearedKey = sessionKey;
-                    SaveHomeworkNow();
+                    baselineDirty = true;
                     continue;
                 }
                 // A clear only ever happens when the resolved session is NEWER than the one we already
@@ -198,6 +199,7 @@ namespace CampusClock
                 if (shouldClear)
                 {
                     item.LastClearedKey = sessionKey;
+                    baselineDirty = true;
                     if (item.Text.Trim().Length > 0 || item.Done)
                     {
                         if (item.Text.Trim().Length > 0)
@@ -215,6 +217,7 @@ namespace CampusClock
                 else if (string.CompareOrdinal(sessionKey, item.LastClearedKey) > 0)
                 {
                     item.LastClearedKey = sessionKey;   // upgrade a legacy key / never move backwards
+                    baselineDirty = true;
                 }
             }
             if (cleared.Count > 0)
@@ -231,6 +234,10 @@ namespace CampusClock
                 Log.Info(msg);
                 SaveHomeworkNow();
                 if (HomeworkChanged != null) HomeworkChanged(this, EventArgs.Empty);
+            }
+            else if (baselineDirty)
+            {
+                SaveHomeworkNow();
             }
             return cleared;
         }

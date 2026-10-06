@@ -113,7 +113,6 @@ namespace CampusClock
                             inconclusive = true;
                             Say("   窗口对 WM_MOUSEMOVE 没有任何反应：本环境无法用合成消息驱动 WPF 输入，");
                             Say("   该测试在真实桌面上（有真实鼠标/输入桌面）才有意义，这里不判定为失败。");
-                            widget.AllowClose();
                             widget.Close();
                             timer.Stop();
                             Dispatcher.CurrentDispatcher.InvokeShutdown();
@@ -141,7 +140,6 @@ namespace CampusClock
                         Say("④ 移出后尺寸 " + W(collapsedRect) + "x" + H(collapsedRect));
                         Check("④ 指针移出后自动收起", Math.Abs(W(collapsedRect) - W(ballRect)) <= 2,
                             W(collapsedRect) + "x" + H(collapsedRect));
-                        widget.AllowClose();
                         widget.Close();
                         timer.Stop();
                         Dispatcher.ExitAllFrames();

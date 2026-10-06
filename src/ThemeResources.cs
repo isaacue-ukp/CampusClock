@@ -10,10 +10,16 @@ namespace CampusClock
     public static class ThemeResources
     {
         private static bool applied;
+        private static ResourceDictionary current;
 
         public static string ToHex(Color c)
         {
             return string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
+        }
+
+        public static string ToHexA(Color c)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}{3:X2}", c.A, c.R, c.G, c.B);
         }
 
         public static void Apply()
@@ -22,16 +28,43 @@ namespace CampusClock
             applied = true;
             try
             {
-                ResourceDictionary rd = (ResourceDictionary)XamlReader.Parse(Xaml());
+                current = (ResourceDictionary)XamlReader.Parse(Xaml());
                 if (Application.Current != null)
                 {
-                    Application.Current.Resources.MergedDictionaries.Add(rd);
+                    Application.Current.Resources.MergedDictionaries.Add(current);
                 }
             }
             catch (Exception ex)
             {
                 Log.Warn("加载深色滚动条样式失败（不影响功能）：" + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Replaces the accent-bound brushes in place. Controls that reference them through
+        /// DynamicResource (text box caret / selection / focus border) update live when the user picks
+        /// a new accent colour, without reloading the whole dictionary.
+        /// </summary>
+        public static void Refresh()
+        {
+            if (current == null) return;
+            try
+            {
+                current["CC.Accent"] = Brush(Palette.Accent);
+                current["CC.AccentSoft"] = Brush(Palette.Alpha(Palette.Accent, 0.45));
+                current["CC.AccentFocus"] = Brush(Palette.Alpha(Palette.Accent, 0.75));
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("刷新强调色样式失败：" + ex.Message);
+            }
+        }
+
+        private static SolidColorBrush Brush(Color c)
+        {
+            SolidColorBrush b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
         }
 
         public static string Xaml()
@@ -44,6 +77,9 @@ namespace CampusClock
             return
                 "<ResourceDictionary xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
                 "xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">" +
+                "<SolidColorBrush x:Key=\"CC.Accent\" Color=\"" + ToHex(Palette.Accent) + "\"/>" +
+                "<SolidColorBrush x:Key=\"CC.AccentSoft\" Color=\"" + ToHexA(Palette.Alpha(Palette.Accent, 0.45)) + "\"/>" +
+                "<SolidColorBrush x:Key=\"CC.AccentFocus\" Color=\"" + ToHexA(Palette.Alpha(Palette.Accent, 0.75)) + "\"/>" +
                 "<Style TargetType=\"{x:Type ScrollBar}\">" +
                 "<Setter Property=\"Background\" Value=\"" + barBg + "\"/>" +
                 "<Setter Property=\"Width\" Value=\"10\"/>" +
@@ -86,8 +122,8 @@ namespace CampusClock
                 "<Setter Property=\"Foreground\" Value=\"" + ToHex(Palette.TextPrimary) + "\"/>" +
                 "<Setter Property=\"BorderBrush\" Value=\"" + ToHex(Palette.Border) + "\"/>" +
                 "<Setter Property=\"BorderThickness\" Value=\"1\"/>" +
-                "<Setter Property=\"CaretBrush\" Value=\"" + ToHex(Palette.Accent) + "\"/>" +
-                "<Setter Property=\"SelectionBrush\" Value=\"" + ToHex(Palette.Alpha(Palette.Accent, 0.45)) + "\"/>" +
+                "<Setter Property=\"CaretBrush\" Value=\"{DynamicResource CC.Accent}\"/>" +
+                "<Setter Property=\"SelectionBrush\" Value=\"{DynamicResource CC.AccentSoft}\"/>" +
                 "<Setter Property=\"Padding\" Value=\"9,7\"/>" +
                 "<Setter Property=\"FontFamily\" Value=\"Segoe UI, Microsoft YaHei UI, Microsoft YaHei\"/>" +
                 "<Setter Property=\"FontSize\" Value=\"13\"/>" +
@@ -102,7 +138,7 @@ namespace CampusClock
                 "</Border>" +
                 "<ControlTemplate.Triggers>" +
                 "<Trigger Property=\"IsKeyboardFocusWithin\" Value=\"True\">" +
-                "<Setter TargetName=\"bd\" Property=\"BorderBrush\" Value=\"" + ToHex(Palette.Alpha(Palette.Accent, 0.75)) + "\"/>" +
+                "<Setter TargetName=\"bd\" Property=\"BorderBrush\" Value=\"{DynamicResource CC.AccentFocus}\"/>" +
                 "</Trigger>" +
                 "</ControlTemplate.Triggers>" +
                 "</ControlTemplate>" +

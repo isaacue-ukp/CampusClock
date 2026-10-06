@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace CampusClock
 {
@@ -15,6 +16,9 @@ namespace CampusClock
         private TextBlock weekTitle;
         private TextBlock weekRange;
         private ContentControl gridHost;
+        private double savedScrollX;
+        private double savedScrollY;
+        private int lastNowMin = -1;
 
         public TimetablePage(AppCore core)
         {
@@ -82,6 +86,7 @@ namespace CampusClock
 
         public void Rebuild()
         {
+            CaptureScroll();
             DateTime weekStart = CurrentWeekStart;
             int index = core.Schedule != null ? core.Schedule.WeekIndex(weekStart) : 1;
             if (index >= 1) weekTitle.Text = "第 " + index.ToString(CultureInfo.InvariantCulture) + " 周";
@@ -95,11 +100,55 @@ namespace CampusClock
             double boxH = ActualHeight > 200 ? ActualHeight - 70 : 520;
             FrameworkElement grid = TimetableRenderer.Build(core.Schedule, core.Config, weekStart, false, boxW, boxH);
             gridHost.Content = grid;
+            lastNowMin = DateTime.Now.Hour * 60 + DateTime.Now.Minute;
+            RestoreScrollSoon();
         }
 
+        /// <summary>
+        /// Called by the 20 s tick. Only the "now" marker moves over time, so rebuilding the whole
+        /// grid every tick is wasteful and (because the renderer creates a fresh ScrollViewer) it used
+        /// to jump the user's scroll position back to the top. Rebuild at most once per minute.
+        /// </summary>
         public void RefreshMetrics()
         {
+            int nowMin = DateTime.Now.Hour * 60 + DateTime.Now.Minute;
+            if (nowMin == lastNowMin) return;
             Rebuild();
+        }
+
+        private void CaptureScroll()
+        {
+            ScrollViewer sv = FindScrollViewer(gridHost);
+            if (sv == null) return;
+            savedScrollX = sv.HorizontalOffset;
+            savedScrollY = sv.VerticalOffset;
+        }
+
+        private void RestoreScrollSoon()
+        {
+            if (savedScrollX <= 0 && savedScrollY <= 0) return;
+            gridHost.Dispatcher.BeginInvoke(new Action(delegate
+            {
+                ScrollViewer sv = FindScrollViewer(gridHost);
+                if (sv == null) return;
+                if (savedScrollX > 0) sv.ScrollToHorizontalOffset(savedScrollX);
+                if (savedScrollY > 0) sv.ScrollToVerticalOffset(savedScrollY);
+            }), DispatcherPriority.Loaded);
+        }
+
+        private static ScrollViewer FindScrollViewer(DependencyObject root)
+        {
+            if (root == null) return null;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(root, i);
+                ScrollViewer sv = child as ScrollViewer;
+                if (sv != null) return sv;
+                ScrollViewer deep = FindScrollViewer(child);
+                if (deep != null) return deep;
+            }
+            return null;
         }
     }
 
@@ -207,6 +256,7 @@ namespace CampusClock
                 core.SaveHomeworkNow();
                 done = item.Done;
                 ApplyVisual();
+                core.RaiseHomeworkChanged();   // keep the floating panel in sync
                 if (Changed != null) Changed(this, EventArgs.Empty);
             };
             g.Children.Add(circle);

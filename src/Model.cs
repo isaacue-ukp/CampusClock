@@ -627,10 +627,11 @@ namespace CampusClock
             }
             catch (Exception ex)
             {
-                // the file is there but unreadable (locked / permission): keep it untouched
+                // the file is there but unreadable (locked / permission): keep a copy before we can
+                // ever overwrite it, then keep running with an empty state.
                 st.LoadFailed = true;
-                st.LoadBackupPath = Paths.HomeworkFile;
-                Log.Error("读取 homework.json 失败，已保持原文件不变，本次不覆盖：" + ex.Message);
+                st.LoadBackupPath = BackupBrokenFile();
+                Log.Error("读取 homework.json 失败（已备份到 " + st.LoadBackupPath + "，本次不覆盖）：" + ex.Message);
                 return st;
             }
             try

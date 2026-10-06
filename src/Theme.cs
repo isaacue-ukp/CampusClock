@@ -53,6 +53,7 @@ namespace CampusClock
         public static void SetAccent(string hex)
         {
             Accent = Hex(hex);
+            ThemeResources.Refresh();   // keep the accent-bound brushes in sync (live colour change)
         }
 
         public static Color Hex(string hex)
